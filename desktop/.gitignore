@@ -1,0 +1,4 @@
+build/
+.gradle/
+native/build/
+.kotlin/

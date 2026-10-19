@@ -158,6 +158,9 @@ static void pkTeardown(void) {
         pk_cheats_clear(g.core);        // and forgets the ROM bytes it kept
         g.core->deinit(g.core);         // unloads ROM, flushes save VFile
         g.core = NULL;
+        // The core owned the save once loadSave attached it: GBAUnloadROM / GBUnloadROM have closed it
+        // (realVf / sramRealVf). Closing it again here was a double free (a crash on desktop glibc).
+        g.saveVf = NULL;
     }
     if (g.saveVf) {
         g.saveVf->close(g.saveVf);
