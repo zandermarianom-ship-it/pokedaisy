@@ -49,6 +49,50 @@ fun main(args: Array<String>) {
     val rom = File(args.firstOrNull() ?: error("usage: desktop <rom.gba> [save]")).absoluteFile
     require(rom.isFile) { "no ROM at $rom" }
     val save = args.getOrNull(1)?.let(::File) ?: defaultSave(rom)
+    play(rom, save)
+}
+
+/** Opened by double-click (PokeDaisy.bat): no console, so errors show as a window and everything is logged. */
+fun startDesktop(args: Array<String>) {
+    System.getProperty("logfile")?.let { path ->
+        val log = java.io.PrintStream(java.io.FileOutputStream(path, false), true)
+        System.setOut(log)
+        System.setErr(log)
+    }
+    try {
+        val rom = args.firstOrNull()?.let(::File) ?: pickRom() ?: return
+        require(rom.isFile) { "No ROM at $rom" }
+        play(rom.absoluteFile, args.getOrNull(1)?.let(::File) ?: defaultSave(rom.absoluteFile))
+    } catch (t: Throwable) {
+        t.printStackTrace()
+        showError("PokeDaisy couldn't start:\n\n$t\n\nDetails are in ${System.getProperty("logfile") ?: "the console"}.")
+        System.exit(1)
+    }
+}
+
+/** The open-a-ROM window (the system's own file dialog); null if cancelled. */
+fun pickRom(): File? {
+    val last = File(android.content.Context().filesDir, "last-rom.txt")
+    val dialog = java.awt.FileDialog(null as java.awt.Frame?, "PokeDaisy - open a Pokemon ROM", java.awt.FileDialog.LOAD)
+    runCatching { File(last.readText().trim()).parentFile?.takeIf { it.isDirectory }?.let { dialog.directory = it.path } }
+    dialog.setFilenameFilter { _, name -> name.lowercase().let { it.endsWith(".gba") || it.endsWith(".gb") || it.endsWith(".gbc") } }
+    dialog.file = "*.gba;*.gb;*.gbc" // Windows' dialog takes its filter from here
+    dialog.isVisible = true
+    val name = dialog.file ?: return null
+    val f = File(dialog.directory, name)
+    runCatching { last.writeText(f.path) }
+    return f
+}
+
+fun showError(message: String) {
+    println(message)
+    if (!java.awt.GraphicsEnvironment.isHeadless())
+        javax.swing.JOptionPane.showMessageDialog(null, message, "PokeDaisy", javax.swing.JOptionPane.ERROR_MESSAGE)
+}
+
+/** The game and the companion windows for [rom], until either is closed. */
+fun play(rom: File, save: File) {
+    println("ROM ${rom.path}, save ${save.path}")
     prepareArt(rom)
     createSharedUiState()
 

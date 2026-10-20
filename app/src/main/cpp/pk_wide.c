@@ -34,6 +34,13 @@
 #include <mgba/core/core.h>
 #include <mgba/internal/gba/gba.h>
 
+#ifdef _WIN32
+// mGBA's headers bring in <windows.h>, whose minwindef.h defines near / far (16-bit pointer qualifiers) as empty
+// macros: this file uses both as variable names.
+#undef near
+#undef far
+#endif
+
 #define MAP_OFFSET 7
 #define MAX_MAP_DATA 0x2800        // MAX_MAP_DATA_SIZE, both games (u16 cells)
 #define NUM_METATILES_TOTAL 4096   // R.O.W.E.'s 12-bit ids (SoulGold 11, vanilla 10)

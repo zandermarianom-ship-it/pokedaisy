@@ -68,3 +68,32 @@ tasks.register<JavaExec>("selftest") {
     systemProperty("out", layout.buildDirectory.dir("check").get().asFile.absolutePath)
     systemProperty("script", project.findProperty("steps")?.toString().orEmpty())
 }
+
+// --- Windows package: build/windows/PokeDaisy (+ PokeDaisy-windows.zip) ------------------------------------------
+// The Windows DLL comes from native/build-win (cmake with native/mingw-w64.cmake); the UI libraries' Windows parts
+// (Skia) from compose's windows_x64 artifacts. No Java runtime inside: PokeDaisy.bat finds an installed one.
+// Everything on the desktop classpath is plain JVM except Skia's native runtime: add its Windows build (same skiko
+// version as the Linux one Compose resolved), alone and non-transitive.
+val windowsSkia by configurations.creating { isTransitive = false }
+dependencies { windowsSkia("org.jetbrains.skiko:skiko-awt-runtime-windows-x64:0.7.85.4") }
+
+val windowsDir = layout.buildDirectory.dir("windows/PokeDaisy")
+val packageWindows = tasks.register<Sync>("packageWindows") {
+    description = "Assembles the portable Windows folder (build/windows/PokeDaisy)."
+    into(windowsDir)
+    from(tasks.named("jar")) { into("lib") }
+    from(configurations["runtimeClasspath"]) { into("lib"); exclude("skiko-awt-runtime-linux-*") }
+    from(windowsSkia) { into("lib") }
+    from(rootDir.resolve("native/build-win/pokedaisy.dll")) { into("native") }
+    from(rootDir.resolve("../app/src/main/assets")) { into("assets") }
+    from(rootDir.resolve("windows")) { include("PokeDaisy.bat", "README.txt") }
+    from(rootDir.resolve("../LICENSE")) { rename { "LICENSE.txt" } }
+    doFirst { require(rootDir.resolve("native/build-win/pokedaisy.dll").isFile) { "build native/build-win first (see README.md)" } }
+}
+tasks.register<Zip>("zipWindows") {
+    description = "Zips the Windows folder: build/windows/PokeDaisy-windows.zip."
+    dependsOn(packageWindows)
+    from(windowsDir) { into("PokeDaisy") }
+    destinationDirectory.set(layout.buildDirectory.dir("windows"))
+    archiveFileName.set("PokeDaisy-windows.zip")
+}

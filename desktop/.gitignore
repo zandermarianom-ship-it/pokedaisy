@@ -2,3 +2,4 @@ build/
 .gradle/
 native/build/
 .kotlin/
+native/build-win/
