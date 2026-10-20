@@ -48,6 +48,25 @@ Saves follow the app's own rules (Settings > FOLDERS, ALSO LOOK IN, a game's SAV
 the ROM (`.srm`, else `.sav`); a new save is a `.srm`, like RetroArch's, in the chosen saves folder or beside the
 ROM. Every start backs the save up to `pokedaisy-backups/` first, as on Android.
 
+### Linux / Batocera
+
+```bash
+cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build -j --target pokedaisy
+gradle tarLinux          # build/linux/PokeDaisy-linux-x64.tar.gz
+```
+
+The tarball carries a Java runtime made by `jlink` from the JDK running Gradle (Batocera has none), `PokeDaisy.sh`,
+and `batocera/PokeDaisy.sh` for `/userdata/roms/ports` (first run: `/userdata/roms/gba`, saves with RetroArch's in
+`/userdata/saves/gba`, full screen). Its runtime needs the build machine's glibc (Ubuntu 24.04: 2.38, so Batocera 39+);
+`native/shim/glibc_compat.c` keeps `libpokedaisy.so` itself at 2.34. Window / font libraries a system may lack sit in
+`jre/lib/fallback`, used only when `ldd` finds them missing.
+
+**Controllers** (`Gamepad.kt`, Jamepad = SDL2's GameController, natives inside for Windows and Linux): buttons by
+position, EAST = the GBA's A, like RetroArch. The Library / Settings get the pad as the Android key events it sends
+there (the launcher's own D-pad / A / B / Y), else Compose focus; in a game WEST / Home steers the companion, NORTH the
+HUD's buttons (focus rings, `LocalFocusRings`), SELECT + START leaves. `-Ppadfifo=PATH` reads `BTN down|up` lines
+from a named pipe to test without a pad.
+
 **Keys**: arrows, X = A, Z = B, Enter = START, Backspace = SELECT, A = L, S = R, E = EXPAND on / off,
 Space = hold fast-forward, Tab = fast-forward on / off, F5 / F7 = save / load state, F6 / F8 = state slot,
 Esc = the companion's side panel in / out (as the phone's BACK), F2 = companion in its own window, F3 = hide it,

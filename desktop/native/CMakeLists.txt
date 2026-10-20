@@ -59,6 +59,10 @@ if(WIN32)
     target_link_libraries(pokedaisy mgba rcheevos -Wl,-Bstatic pthread -Wl,-Bdynamic ws2_32 shlwapi)
 else()
     target_link_libraries(pokedaisy mgba rcheevos m pthread)
+    # One glibc 2.38 symbol made ours; older glibc (Batocera before 2024) can load the library then.
+    add_library(glibccompat OBJECT shim/glibc_compat.c)
+    set_target_properties(glibccompat PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF POSITION_INDEPENDENT_CODE ON)
+    target_sources(pokedaisy PRIVATE $<TARGET_OBJECTS:glibccompat>)
 endif()
 
 # A Windows smoke test (cross builds only): the core as pokedaisy.dll links it, run under Wine or on Windows.

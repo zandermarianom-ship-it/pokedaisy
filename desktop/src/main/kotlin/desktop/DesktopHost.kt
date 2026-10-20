@@ -1,6 +1,8 @@
 package desktop
 
 import android.content.Intent
+import android.view.KeyEvent
+import androidx.compose.ui.focus.FocusDirection
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
@@ -83,6 +85,51 @@ object DesktopHost {
         g.stop()
         if (screens.isEmpty()) open(com.pokedaisy.app.LibraryActivity::class.java)
         else screens.last().activity.onResume()
+    }
+
+    /** The Library / Settings window's focus and AWT window: a controller walks them. */
+    var libraryFocus: androidx.compose.ui.focus.FocusManager? = null
+    var libraryWindow: java.awt.Window? = null
+
+    /**
+     * A controller in the Library / Settings. The pad goes to the screen as the Android key events a pad sends there
+     * (the Library's launcher: the D-pad walks the games, A plays, B the game's menu, Y Settings, SELECT the sort; Settings:
+     * its first row, B closing a pop-up), Nintendo positions like the GBA's (EAST = A, SOUTH = B, WEST = Y, NORTH = X).
+     * What the screen leaves, the D-pad moves Compose's focus, A presses it and B goes back a screen (Esc).
+     * SELECT + START: back a screen, and from the Library quit (no keyboard or mouse on Batocera).
+     */
+    fun libraryPad(b: Gamepad.Btn, down: Boolean, repeat: Boolean) {
+        val top = screens.lastOrNull() ?: return
+        if (b == Gamepad.Btn.EXIT) {
+            if (screens.size > 1) top.activity.finish() else System.exit(0)
+            return
+        }
+        val code = when (b) {
+            Gamepad.Btn.UP -> KeyEvent.KEYCODE_DPAD_UP; Gamepad.Btn.DOWN -> KeyEvent.KEYCODE_DPAD_DOWN
+            Gamepad.Btn.LEFT -> KeyEvent.KEYCODE_DPAD_LEFT; Gamepad.Btn.RIGHT -> KeyEvent.KEYCODE_DPAD_RIGHT
+            Gamepad.Btn.EAST -> KeyEvent.KEYCODE_BUTTON_A; Gamepad.Btn.SOUTH -> KeyEvent.KEYCODE_BUTTON_B
+            Gamepad.Btn.WEST -> KeyEvent.KEYCODE_BUTTON_Y; Gamepad.Btn.NORTH -> KeyEvent.KEYCODE_BUTTON_X
+            Gamepad.Btn.LB -> KeyEvent.KEYCODE_BUTTON_L1; Gamepad.Btn.RB -> KeyEvent.KEYCODE_BUTTON_R1
+            Gamepad.Btn.START -> KeyEvent.KEYCODE_BUTTON_START; Gamepad.Btn.BACK -> KeyEvent.KEYCODE_BUTTON_SELECT
+            else -> return
+        }
+        val ev = KeyEvent(if (down) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP, code, if (repeat) 1 else 0)
+        if (runCatching { top.activity.dispatchKeyEvent(ev) }.onFailure { it.printStackTrace() }.getOrDefault(false)) return
+        if (!down) return
+        val fm = libraryFocus ?: return
+        val dir = when (b) {
+            Gamepad.Btn.UP -> FocusDirection.Up
+            Gamepad.Btn.DOWN -> FocusDirection.Down
+            Gamepad.Btn.LEFT -> FocusDirection.Left
+            Gamepad.Btn.RIGHT -> FocusDirection.Right
+            Gamepad.Btn.EAST -> { if (!repeat) Synthetic.enter(libraryWindow); return }
+            Gamepad.Btn.SOUTH -> { if (!repeat) Synthetic.escape(libraryWindow); return }
+            Gamepad.Btn.LB -> FocusDirection.Previous
+            Gamepad.Btn.RB -> FocusDirection.Next
+            else -> return
+        }
+        // Nothing focused yet: the first thing on the screen.
+        if (!fm.moveFocus(dir)) fm.moveFocus(FocusDirection.Next)
     }
 
     fun toast(text: String) {

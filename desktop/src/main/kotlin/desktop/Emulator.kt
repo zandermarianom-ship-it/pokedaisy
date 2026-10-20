@@ -30,6 +30,9 @@ class Emulator(val rom: File, val save: File?) {
     /** GBA keys held now (MgbaCore.Key bits), set by the game window. */
     @Volatile var keys = 0
 
+    /** GBA keys a controller holds now (Gamepad), on top of [keys]. */
+    @Volatile var padKeys = 0
+
     /** SETTINGS > ASPECT > EXPAND: the overworld drawn past the GBA's edges, for a 16:9 window. */
     @Volatile var expand = true
 
@@ -101,7 +104,7 @@ class Emulator(val rom: File, val save: File?) {
         val n = if (ffToggled || ffHeld) ffSpeed.coerceIn(1, 8) else 1
         for (i in 1..n) {
             val shown = i == n
-            MgbaCore.pkSetKeys(keys)
+            MgbaCore.pkSetKeys(keys or padKeys)
             MgbaCore.pkWideSetDraw(shown)
             MgbaCore.pkRunFrame()
             frames++

@@ -43,6 +43,9 @@ enum class CompanionShape(val label: String, val aspect: Float?) {
     FILL("Fill its area", null),
 }
 
+/** Started for a TV (Batocera's ports, `-Dpokedaisy.fullscreen=true`): the Library and the game fill the screen. */
+val startFullscreen: Boolean get() = System.getProperty("pokedaisy.fullscreen") == "true"
+
 /** How the game's window sits on its monitor. */
 enum class DisplayMode(val label: String) { WINDOWED("Windowed"), BORDERLESS("Borderless (fills the monitor)"), FULLSCREEN("Full screen") }
 
@@ -148,7 +151,11 @@ class DesktopSettings(
     fun setCompanionShape(s: CompanionShape) { shapeState = s; config.set("companionShape", s.name) }
 
     /** The game window: WINDOWED, BORDERLESS (fills its monitor, no title bar) or FULLSCREEN (View menu, F11). */
-    private var modeState by mutableStateOf(runCatching { DisplayMode.valueOf(config.get("displayMode") ?: "") }.getOrDefault(DisplayMode.WINDOWED))
+    private var modeState by mutableStateOf(
+        // A TV / Batocera launch (PD_FULLSCREEN): full screen whatever was picked on a desktop.
+        if (startFullscreen) DisplayMode.FULLSCREEN
+        else runCatching { DisplayMode.valueOf(config.get("displayMode") ?: "") }.getOrDefault(DisplayMode.WINDOWED)
+    )
     val displayMode get() = modeState
     fun setDisplayMode(m: DisplayMode) { modeState = m; config.set("displayMode", m.name) }
 

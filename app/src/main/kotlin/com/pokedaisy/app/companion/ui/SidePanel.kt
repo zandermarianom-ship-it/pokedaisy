@@ -131,6 +131,9 @@ fun SidePanelHost(
     focusKeys: ((key: MenuKey, repeat: Boolean, start: () -> Unit) -> Boolean)? = null,
     /** The window's width / height, when it's set (the desktop); null = from the screen's shape. */
     windowAspect: Float? = null,
+    /** The game's buttons steer it ([keys], [focusKeys], the D-pad's focus starts): the window always; the side panel
+     * when the host routes them here (the desktop's controller). */
+    keysEnabled: Boolean = window,
     content: @Composable () -> Unit,
 ) {
     val box = remember { IntArray(4) }   // the window's left / top / right / bottom, for the dim's taps
@@ -138,7 +141,7 @@ fun SidePanelHost(
     val overlays = remember { OverlayStack() }
     var hasFocus by remember { mutableStateOf(false) }
     // Registered before the companion's own handlers, so it gets only what they leave.
-    keys?.Handler(enabled = window) { key, repeat ->
+    keys?.Handler(enabled = keysEnabled) { key, repeat ->
         focusKeys?.invoke(key, repeat) { if (!hasFocus) starts.focusNewest() } ?: false
     }
     BoxWithConstraints(
@@ -162,8 +165,8 @@ fun SidePanelHost(
                 CompositionLocalProvider(
                     LocalDensity provides if (window) chrome else outer,
                     // Pop-ups keep the focus in and hand it back when they close; the D-pad's starting places.
-                    LocalOverlayStack provides overlays.takeIf { window },
-                    LocalFocusStarts provides starts.takeIf { window },
+                    LocalOverlayStack provides overlays.takeIf { keysEnabled },
+                    LocalFocusStarts provides starts.takeIf { keysEnabled },
                     // L / R at the tab bar's ends: the buttons that step it.
                     LocalCompanionWindow provides window,
                 ) {

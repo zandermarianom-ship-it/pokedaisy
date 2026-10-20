@@ -42,6 +42,8 @@ dependencies {
     implementation("org.json:json:20240303")
     implementation("org.apache.commons:commons-compress:1.28.0")
     implementation("org.tukaani:xz:1.12")
+    // Game controllers: SDL2 GameController, its natives (Windows, Linux x64 / arm64) inside.
+    implementation("com.badlogicgames.jamepad:jamepad:2.30.0.0")
     implementation("org.jetbrains.compose.ui:ui-test-junit4-desktop:1.5.12")
 }
 
@@ -54,6 +56,7 @@ fun JavaExec.desktopProps() {
     jvmArgs("-Djava.library.path=${nativeDir.absolutePath}")
     systemProperty("scratch", (project.findProperty("userdata")?.toString()) ?: layout.buildDirectory.dir("userdata").get().asFile.absolutePath)
     project.findProperty("monitors")?.let { systemProperty("monitors", it.toString()) }
+    project.findProperty("padfifo")?.let { systemProperty("padfifo", it.toString()) }
     args = listOfNotNull(project.findProperty("rom")?.toString(), project.findProperty("sav")?.toString())
 }
 
@@ -99,4 +102,62 @@ tasks.register<Zip>("zipWindows") {
     from(windowsDir) { into("PokeDaisy") }
     destinationDirectory.set(layout.buildDirectory.dir("windows"))
     archiveFileName.set("PokeDaisy-windows.zip")
+}
+
+// --- Linux / Batocera package: build/linux/PokeDaisy (+ PokeDaisy-linux-x64.tar.gz) -------------------------------
+// A Java runtime is inside (jlink of the JDK building this: Batocera has no desktop Java), and the native library from
+// native/build. The window and font libraries a minimal system may lack go in jre/lib/fallback, which PokeDaisy.sh
+// only puts on the path when the system doesn't have them.
+val linuxDir = layout.buildDirectory.dir("linux/PokeDaisy")
+val jreDir = layout.buildDirectory.dir("linux/jre")
+val jlinkJre = tasks.register<Exec>("jlinkJre") {
+    description = "A trimmed Java runtime for the Linux package (build/linux/jre)."
+    val javaHome = File(System.getProperty("java.home"))
+    val out = jreDir.get().asFile
+    outputs.dir(out)
+    doFirst { out.deleteRecursively() }
+    commandLine(
+        javaHome.resolve("bin/jlink").path,
+        "--add-modules", listOf(
+            "java.base", "java.desktop", "java.logging", "java.naming", "java.net.http", "java.prefs", "java.scripting",
+            "java.sql", "java.xml", "java.management", "jdk.crypto.ec", "jdk.unsupported", "jdk.zipfs", "jdk.charsets",
+            "jdk.localedata", "jdk.accessibility",
+        ).joinToString(","),
+        "--include-locales", "en,ja,fr,de,it,es,pt",
+        "--strip-debug", "--no-header-files", "--no-man-pages", "--compress", "zip-6",
+        "--output", out.path,
+    )
+}
+val linuxFallbackLibs = listOf(
+    "libXtst.so.6", "libXi.so.6", "libharfbuzz.so.0", "libgraphite2.so.3", "libglib-2.0.so.0", "libpcre2-8.so.0",
+    "libfreetype.so.6", "libpng16.so.16", "libbrotlidec.so.1", "libbrotlicommon.so.1",
+)
+val packageLinux = tasks.register<Sync>("packageLinux") {
+    description = "Assembles the Linux / Batocera folder (build/linux/PokeDaisy)."
+    dependsOn(jlinkJre)
+    into(linuxDir)
+    from(tasks.named("jar")) { into("lib") }
+    from(configurations["runtimeClasspath"]) { into("lib") }
+    from(rootDir.resolve("native/build/libpokedaisy.so")) { into("native") }
+    from(rootDir.resolve("../app/src/main/assets")) { into("assets") }
+    from(jreDir) { into("jre") }
+    // The fallbacks, as the files their names point at (no symlinks in the archive).
+    linuxFallbackLibs.forEach { name ->
+        val f = File("/usr/lib/x86_64-linux-gnu/$name")
+        if (f.exists()) from(f.canonicalFile) { into("jre/lib/fallback"); rename { name } }
+    }
+    from(rootDir.resolve("linux")) { include("PokeDaisy.sh", "README.txt", "batocera/**") }
+    from(rootDir.resolve("../LICENSE")) { rename { "LICENSE.txt" } }
+    doFirst { require(rootDir.resolve("native/build/libpokedaisy.so").isFile) { "build native/build first (see README.md)" } }
+}
+tasks.register<Tar>("tarLinux") {
+    description = "Packs the Linux folder: build/linux/PokeDaisy-linux-x64.tar.gz (run permissions kept)."
+    dependsOn(packageLinux)
+    from(linuxDir) {
+        into("PokeDaisy")
+        eachFile { if (name.endsWith(".sh") || path.contains("/jre/bin/") || name == "jspawnhelper") mode = "755".toInt(8) }
+    }
+    compression = Compression.GZIP
+    destinationDirectory.set(layout.buildDirectory.dir("linux"))
+    archiveFileName.set("PokeDaisy-linux-x64.tar.gz")
 }

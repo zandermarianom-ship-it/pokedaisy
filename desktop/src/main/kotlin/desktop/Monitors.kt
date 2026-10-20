@@ -54,6 +54,8 @@ object Monitors {
                 floating(game, main.x + 10, main.y + 30, gameW - 20, main.height - 80)
                 floating(companion, main.x + gameW, main.y + 30, main.width - gameW - 10, main.height - 80)
             }
+            // Full screen / borderless stay as they are (DISPLAY MODE).
+            game.placement != WindowPlacement.Floating -> {}
             else -> floating(game, main.x + 30, main.y + 30, minOf(1600, main.width - 60), minOf(760, main.height - 80))
         }
     }

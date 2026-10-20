@@ -41,15 +41,24 @@ SAVES
   so it syncs with RetroArch / Batocera. Every start keeps a backup in a "pokedaisy-backups" folder beside the
   save (the Library's RESTORE BACKUP lists them). Settings, art and save states live in the userdata folder here.
 
+CONTROLLER (any pad SDL knows: Xbox, PlayStation, 8BitDo, Switch...; buttons by position, like RetroArch)
+  Library:  D-pad = choose, A (right button) = play, B (bottom) = the game's options, Y (left) = Settings,
+            SELECT = sort, SELECT + START = quit PokeDaisy
+  Game:     D-pad / left stick, A, B, L, R, START, SELECT = the GBA's
+            X (top) = the HUD's cursor: D-pad picks a button, A presses it, B leaves
+            Y (left) or Home = the companion in / out: D-pad moves, A presses, B goes back, L / R change tabs
+            RT (hold) = fast-forward, LT = fast-forward on / off, R3 = widescreen (EXPAND) on / off
+            SELECT + START = back to the Library
+
 KEYS (game window)
   Arrows = D-pad   X = A   Z = B   Enter = Start   Backspace = Select   A = L   S = R
   E = EXPAND (widescreen) on / off      Space (hold) / Tab = fast-forward
   F5 / F7 = save / load state           F6 / F8 = previous / next slot
-  Esc = companion in / out (and its BACK)   F2 = companion in its own window   F3 = hidden / shown
+  Esc = companion in / out (and its BACK)   H = HUD cursor   F2 = companion in its own window   F3 = hidden / shown
   F10 = borderless   F11 = full screen
 
 NOT YET
-  Controllers, rebinding keys, the companion's buttons that press the game (battle buttons, USE, FLY),
+  Rebinding keys or buttons, the companion's buttons that press the game (battle buttons, USE, FLY),
   shaders, RetroAchievements.
 
 PROBLEMS

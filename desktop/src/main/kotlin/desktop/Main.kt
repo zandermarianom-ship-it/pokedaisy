@@ -4,6 +4,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.window.ApplicationScope
 import androidx.compose.runtime.key
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.onFocusChanged
@@ -107,6 +112,9 @@ fun runDesktop(rom: File?) {
     }
     DesktopHost.open(com.pokedaisy.app.LibraryActivity::class.java)
     rom?.let(DesktopHost::startGame)
+    // Controllers: the game's buttons in a game, the D-pad / A / B through the Library and Settings.
+    Gamepad.listener = { b, down, repeat -> DesktopHost.game?.padButton(b, down, repeat) ?: DesktopHost.libraryPad(b, down, repeat) }
+    Gamepad.start()
     application {
         // One window: the screen on top of the stack (Library, then Settings over it, ...), like the phone's screen.
         // Closing it, or Esc, goes back a screen; on the Library it quits.
@@ -116,11 +124,18 @@ fun runDesktop(rom: File?) {
             Window(
                 onCloseRequest = back,
                 title = top.title,
-                state = rememberWindowState(size = DpSize(1280.dp, 720.dp), position = WindowPosition(60.dp, 40.dp)),
+                state = rememberWindowState(
+                    size = DpSize(1280.dp, 720.dp), position = WindowPosition(60.dp, 40.dp),
+                    placement = if (startFullscreen) androidx.compose.ui.window.WindowPlacement.Fullscreen else androidx.compose.ui.window.WindowPlacement.Floating,
+                ),
                 onPreviewKeyEvent = {
                     if (it.type == KeyEventType.KeyDown && it.key == Key.Escape && DesktopHost.screens.size > 1) { back(); true } else false
                 },
-            ) { key(top) { ActivityScreen(top) } }
+            ) {
+                DesktopHost.libraryFocus = LocalFocusManager.current
+                DesktopHost.libraryWindow = window
+                key(top) { ActivityScreen(top) }
+            }
         }
         DesktopHost.game?.let { g -> key(g) { GameWindows(g) } }
     }
@@ -133,7 +148,13 @@ fun ActivityScreen(screen: DesktopHost.Screen) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val px = with(LocalDensity.current) { Pair(maxWidth.toPx(), maxHeight.toPx()) }
         val density = min(px.first / SCREEN_DP_W, px.second / SCREEN_DP_H)
-        CompositionLocalProvider(LocalDensity provides Density(density)) {
+        // Pop-ups (OptionOverlay) take the D-pad's focus, keep it in and give it back - as Settings does for itself: on the
+        // desktop they're drawn in the same window, so a controller's focus could otherwise land on the list behind them.
+        val overlays = remember(screen) { com.pokedaisy.app.companion.ui.OverlayStack() }
+        CompositionLocalProvider(
+            LocalDensity provides Density(density),
+            com.pokedaisy.app.companion.ui.LocalOverlayStack provides overlays,
+        ) {
             Box(Modifier.size(SCREEN_DP_W.dp, SCREEN_DP_H.dp)) { screen.content() }
         }
         DesktopHost.notice?.let { Notice(it) }
@@ -216,14 +237,14 @@ class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
     var awtWindow: java.awt.Window? = null
     /** The pop-up's focus is inside the companion: the D-pad moves it, else it first goes to the starting row. */
     var popupFocused = false
-    private var synthetic = false
 
     fun moveCompanion(to: CompanionPlace) {
         if (to == CompanionPlace.POPUP && place != CompanionPlace.POPUP) beforePopup = place
         place = to
         if (to == CompanionPlace.DOCKED || to == CompanionPlace.WINDOW) prefs.singleScreen = to == CompanionPlace.DOCKED
         config.set("companionPlace", to.name)
-        if (to == CompanionPlace.POPUP) emu.keys = 0 // held keys let go, as the phone's window does
+        // Held keys let go, as the phone's window does.
+        if (to == CompanionPlace.POPUP) { emu.keys = 0; emu.padKeys = 0; startTries = 0 }
     }
 
     /** Esc: the pop-up opens over the game; open, it goes back a step (a sub-page, a summary...), then closes. */
@@ -242,12 +263,39 @@ class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
         moveCompanion(if (sideView) CompanionPlace.HIDDEN else beforePopup.takeIf { it != CompanionPlace.POPUP } ?: CompanionPlace.DOCKED)
     }
 
+    /** The HUD's controller cursor (Y on a pad, H on the keyboard): the D-pad walks its buttons, A presses, B leaves. */
+    var hudFocus by mutableStateOf(false)
+        private set
+    /** An invisible stop in the middle of the picture the HUD cursor starts from (its buttons are around the edges). */
+    val hudAnchor = androidx.compose.ui.focus.FocusRequester()
+    /** The companion's first stop for the D-pad when its tab has no starting row (an empty PARTY). */
+    val companionStart = androidx.compose.ui.focus.FocusRequester()
+    /** The HUD is showing (set by GameHud): the cursor can only go to a HUD that's there. */
+    var hudShown = false
+
+    fun toggleHudFocus() {
+        if (hudFocus) { leaveHud(); return }
+        if (!hudShown) return
+        if (place == CompanionPlace.POPUP) closePopup()
+        hudFocus = true
+        emu.keys = 0; emu.padKeys = 0
+        runCatching { hudAnchor.requestFocus() }
+    }
+    fun leaveHud() {
+        if (!hudFocus) return
+        hudFocus = false
+        focusManager?.clearFocus(force = true)
+    }
+
+    /** The companion or the HUD has the game's buttons now (they don't reach the game). */
+    val steering get() = place == CompanionPlace.POPUP || hudFocus
+
     /**
-     * The game's keys while the companion pops up, as on the phone: B = back (then close), START = close, L / R = tabs,
-     * the D-pad moves the focus and A presses what has it; none of them reach the game. False = not a game key.
+     * The keyboard's game keys while the companion pops up or the HUD cursor is on, as on the phone: B = back (then
+     * close), START = close, L / R = tabs, the D-pad moves the focus and A presses what has it. False = not a game key.
      */
     fun popupKey(e: KeyEvent): Boolean {
-        if (synthetic) return false
+        if (Synthetic.active) return false
         val k = when (e.key) {
             Key.DirectionUp -> MenuKey.UP; Key.DirectionDown -> MenuKey.DOWN
             Key.DirectionLeft -> MenuKey.LEFT; Key.DirectionRight -> MenuKey.RIGHT
@@ -255,37 +303,104 @@ class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
             Key.Enter -> MenuKey.START; Key.Backspace -> MenuKey.SELECT
             else -> return false
         }
-        if (e.type != KeyEventType.KeyDown) return true
-        when (k) {
-            MenuKey.B -> if (!back.back()) closePopup()
-            MenuKey.START -> closePopup()
-            else -> keys.key(k)
-        }
+        if (e.type == KeyEventType.KeyDown) menuKey(k)
         return true
     }
 
-    /** What nothing in the companion took: the D-pad moves Compose's focus, A presses the focused thing (its Enter). */
-    fun focusKey(key: MenuKey, start: () -> Unit): Boolean {
+    /** One of the game's buttons for the companion / HUD (keyboard or controller). */
+    fun menuKey(k: MenuKey, repeat: Boolean = false) {
+        if (hudFocus) {
+            when (k) {
+                MenuKey.B -> if (!hudBack.back()) leaveHud()
+                MenuKey.START, MenuKey.SELECT -> leaveHud()
+                MenuKey.A -> Synthetic.enter(awtWindow)
+                else -> moveFocus(k)
+            }
+            return
+        }
+        when (k) {
+            MenuKey.B -> if (!back.back()) closePopup()
+            MenuKey.START -> closePopup()
+            else -> keys.key(k, repeat)
+        }
+    }
+
+    private fun moveFocus(k: MenuKey): Boolean {
         val fm = focusManager ?: return false
-        if (!popupFocused && key != MenuKey.A) { start(); return true }
-        when (key) {
+        return when (k) {
             MenuKey.UP -> fm.moveFocus(FocusDirection.Up)
             MenuKey.DOWN -> fm.moveFocus(FocusDirection.Down)
             MenuKey.LEFT -> fm.moveFocus(FocusDirection.Left)
             MenuKey.RIGHT -> fm.moveFocus(FocusDirection.Right)
-            MenuKey.A -> {
-                val w = awtWindow ?: return false
-                val target = w.focusOwner ?: w
-                synthetic = true
-                try {
-                    for (id in listOf(java.awt.event.KeyEvent.KEY_PRESSED, java.awt.event.KeyEvent.KEY_RELEASED))
-                        target.dispatchEvent(java.awt.event.KeyEvent(target, id, System.currentTimeMillis(), 0, java.awt.event.KeyEvent.VK_ENTER, '\n'))
-                } finally { synthetic = false }
-            }
-            else -> return false
+            else -> false
         }
-        return true
     }
+
+    private var startTries = 0
+
+    /** What nothing in the companion took: the D-pad moves Compose's focus, A presses the focused thing (its Enter). */
+    fun focusKey(key: MenuKey, start: () -> Unit): Boolean {
+        if (!popupFocused && key != MenuKey.A) {
+            // Its starting row first (SETTINGS' cursor, a list's first row); a page without one, the first stop.
+            if (startTries++ == 0) start()
+            else runCatching { companionStart.requestFocus(); focusManager?.moveFocus(FocusDirection.Next) }
+            return true
+        }
+        startTries = 0
+        if (key == MenuKey.A) { Synthetic.enter(awtWindow); return true }
+        return moveFocus(key)
+    }
+
+    /**
+     * A controller's button in the game. Playing: the GBA's buttons (EAST = A, SOUTH = B, like RetroArch), RT held =
+     * fast-forward, LT = fast-forward on / off, R3 = EXPAND, SELECT + START = back to the Library. WEST (or GUIDE) = the
+     * companion in / out, NORTH = the HUD's cursor. While
+     * the companion pops up or the HUD cursor is on, the buttons steer them (EAST = A, SOUTH = B / back).
+     */
+    fun padButton(b: Gamepad.Btn, down: Boolean, repeat: Boolean) {
+        // SELECT + START: back to the Library (Batocera's way out of a game).
+        if (b == Gamepad.Btn.EXIT) { emu.padKeys = 0; onEnd(); return }
+        when (b) {
+            Gamepad.Btn.WEST, Gamepad.Btn.GUIDE -> { if (down && !repeat) padCompanion(); return }
+            Gamepad.Btn.NORTH -> { if (down && !repeat) toggleHudFocus(); return }
+            Gamepad.Btn.RT -> { emu.ffHeld = down; return }
+            Gamepad.Btn.LT -> { if (down) settings.setFfToggled(!settings.ffToggled); return }
+            Gamepad.Btn.R3 -> { if (down) settings.setGameAspect(if (settings.gameAspect == GameAspect.WIDE) GameAspect.ORIGINAL else GameAspect.WIDE); return }
+            else -> {}
+        }
+        if (steering) {
+            val k = when (b) {
+                Gamepad.Btn.UP -> MenuKey.UP; Gamepad.Btn.DOWN -> MenuKey.DOWN
+                Gamepad.Btn.LEFT -> MenuKey.LEFT; Gamepad.Btn.RIGHT -> MenuKey.RIGHT
+                Gamepad.Btn.EAST -> MenuKey.A; Gamepad.Btn.SOUTH -> MenuKey.B
+                Gamepad.Btn.LB -> MenuKey.L; Gamepad.Btn.RB -> MenuKey.R
+                Gamepad.Btn.START -> MenuKey.START; Gamepad.Btn.BACK -> MenuKey.SELECT
+                else -> return
+            }
+            if (down) menuKey(k, repeat)
+            return
+        }
+        if (repeat) return
+        val bit = when (b) {
+            Gamepad.Btn.UP -> MgbaCore.Key.UP; Gamepad.Btn.DOWN -> MgbaCore.Key.DOWN
+            Gamepad.Btn.LEFT -> MgbaCore.Key.LEFT; Gamepad.Btn.RIGHT -> MgbaCore.Key.RIGHT
+            Gamepad.Btn.EAST -> MgbaCore.Key.A; Gamepad.Btn.SOUTH -> MgbaCore.Key.B
+            Gamepad.Btn.LB -> MgbaCore.Key.L; Gamepad.Btn.RB -> MgbaCore.Key.R
+            Gamepad.Btn.START -> MgbaCore.Key.START; Gamepad.Btn.BACK -> MgbaCore.Key.SELECT
+            else -> return
+        }
+        emu.padKeys = if (down) emu.padKeys or bit else emu.padKeys and bit.inv()
+    }
+
+    /** The pad's companion button: in / out; locked beside the game it unlocks it, so the pad can steer it. */
+    private fun padCompanion() {
+        leaveHud()
+        when (place) {
+            CompanionPlace.POPUP -> closePopup()
+            else -> moveCompanion(CompanionPlace.POPUP)
+        }
+    }
+
     fun stop() = emu.stop()
 }
 
@@ -296,10 +411,17 @@ class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
 @Composable
 fun ApplicationScope.GameWindows(g: GameSession) {
     val snap by g.emu.store.snapshot.collectAsState()
-    val gameState = rememberWindowState(size = DpSize(1600.dp, 760.dp), position = WindowPosition(30.dp, 30.dp))
+    // Full screen from the start where asked (Batocera): a window with no window manager can't be made so later.
+    val gameState = rememberWindowState(
+        size = DpSize(1600.dp, 760.dp), position = WindowPosition(30.dp, 30.dp),
+        placement = if (g.settings.displayMode == DisplayMode.FULLSCREEN) androidx.compose.ui.window.WindowPlacement.Fullscreen
+            else androidx.compose.ui.window.WindowPlacement.Floating,
+    )
     val companionState = rememberWindowState(size = DpSize(700.dp, 640.dp), position = WindowPosition(1660.dp, 30.dp))
     fun keysFor(state: androidx.compose.ui.window.WindowState) = { e: KeyEvent ->
-        if (e.key == Key.F11) {
+        // The desktop's own Enter (a controller's A on the focused button): for Compose, never the game.
+        if (Synthetic.active) false
+        else if (e.key == Key.F11) {
             if (e.type == KeyEventType.KeyDown) {
                 if (state === gameState) g.settings.setDisplayMode(if (g.settings.displayMode == DisplayMode.FULLSCREEN) DisplayMode.WINDOWED else DisplayMode.FULLSCREEN)
                 else Monitors.toggleFullscreen(state)
@@ -312,7 +434,8 @@ fun ApplicationScope.GameWindows(g: GameSession) {
             true
         }
         else if (e.key == Key.Escape) { if (e.type == KeyEventType.KeyDown) g.togglePopup(); true }
-        else if (g.place == CompanionPlace.POPUP && !g.sideView && g.popupKey(e)) true
+        else if (e.key == Key.H && state === gameState) { if (e.type == KeyEventType.KeyDown) g.toggleHudFocus(); true }
+        else if (g.steering && g.popupKey(e)) true
         else gameKey(g.emu, e, g.settings, g.slots, g.place, g::moveCompanion)
     }
     // BORDERLESS has no title bar, which a window only takes when it's made: a new one each time the mode changes.
@@ -324,12 +447,13 @@ fun ApplicationScope.GameWindows(g: GameSession) {
         undecorated = mode == DisplayMode.BORDERLESS,
         onPreviewKeyEvent = keysFor(gameState),
     ) {
-        LaunchedEffect(mode) { Monitors.display(gameState, mode) }
         // Where the windows go follows SINGLE SCREEN / SWAP SCREENS, whenever either changes (F2, the menus, SETTINGS).
         // (Inside the window: the application's own composition has no frame clock to run effects on.)
         LaunchedEffect(g.place == CompanionPlace.WINDOW, g.swapScreens) {
             Monitors.place(gameState, companionState, g.place == CompanionPlace.WINDOW, g.swapScreens)
         }
+        // After placing (which floats the window): BORDERLESS / FULL SCREEN on top of where it went.
+        LaunchedEffect(mode, g.place == CompanionPlace.WINDOW, g.swapScreens) { Monitors.display(gameState, mode) }
         // No menu bar in BORDERLESS / FULL SCREEN: the game fills the monitor (F10 / F11 go back, Esc has SETTINGS).
         if (mode == DisplayMode.WINDOWED) GameMenus(g.settings, g.slots, g.place, g::moveCompanion, g.onEnd, g::togglePopup)
         g.focusManager = LocalFocusManager.current
@@ -378,7 +502,17 @@ fun ApplicationScope.GameWindows(g: GameSession) {
                         }
                     }
                     Box(Modifier.width(panelW).fillMaxHeight()) {
-                        CompanionPanel(snap, g.settings, g.slots, g.back, fill = true)
+                        // The game's buttons (keyboard, controller) steer it while it's out: SidePanelHost's focus starts.
+                        SidePanelHost(
+                            window = false, keysEnabled = true, onClose = g::closePopup, keys = g.keys,
+                            focusKeys = { key, _, start -> g.focusKey(key, start) },
+                        ) {
+                            Box(Modifier.fillMaxSize().onFocusChanged { g.popupFocused = it.hasFocus }.trapFocus(g.steering)) {
+                                // Where the D-pad starts on a tab with no starting row of its own: its first stop after this.
+                                Box(Modifier.size(1.dp).focusRequester(g.companionStart).focusable(enabled = g.steering))
+                                CompanionPanel(snap, g.settings, g.slots, g.back, g.keys, fill = true)
+                            }
+                        }
                     }
                 }
             }
@@ -594,18 +728,33 @@ fun GameHud(g: GameSession, snap: SnapshotView) {
     val rect = g.gameRect ?: return
     val shown = g.settings.fieldHud && onField && snap.hasData && !snap.unsupported && !snap.inBattle &&
         g.place != CompanionPlace.POPUP
+    // The cursor goes with the HUD (a battle, a menu screen); a panel it opened (BAG) keeps it.
+    g.hudShown = shown
+    LaunchedEffect(shown) { if (!shown) g.leaveHud() }
     // The phone's 1080p screen: a game pixel of 6.75 px, the HUD's base density 2.75 (its GBA pixel 3 px).
     val gamePx = rect.height / Emulator.GBA_H
     val outer = LocalDensity.current
     CompositionLocalProvider(
         LocalDensity provides Density((gamePx * 2.75f / 6.75f).coerceAtLeast(1f), outer.fontScale),
         LocalCompanionBack provides g.hudBack,
+        // A controller walking the HUD: its buttons show which has the cursor.
+        com.pokedaisy.app.companion.ui.LocalFocusRings provides g.hudFocus,
     ) {
+        // The cursor stays in the HUD while the pad steers it (moving off its last button does nothing), and starts on
+        // its first button: a stop in the middle of the picture takes the focus, then the next stop has it.
+        val fm = LocalFocusManager.current
+        LaunchedEffect(g.hudFocus) {
+            if (g.hudFocus) runCatching { g.hudAnchor.requestFocus(); fm.moveFocus(FocusDirection.Next) }
+        }
+        Box(Modifier.fillMaxSize().trapFocus(g.hudFocus)) {
+        Box(Modifier.offset { IntOffset(rect.center.x.toInt(), rect.center.y.toInt()) }.size(1.dp)
+            .focusRequester(g.hudAnchor).focusable(enabled = g.hudFocus))
         FieldHud(
             snap, shown, g.settings.fieldHudStyle, frame = rect,
             // COMPANION while it isn't already beside the game, as the phone shows it while its panel is closed.
             onOpenCompanion = if (g.place == CompanionPlace.DOCKED) null else ({ g.togglePopup() }),
         )
+        }
     }
 }
 
@@ -614,6 +763,7 @@ fun GameHud(g: GameSession, snap: SnapshotView) {
 @Composable
 fun CompanionPanel(
     snap: SnapshotView, settings: DesktopSettings, slots: DesktopSlots, back: CompanionBack? = null,
+    keys: CompanionKeys? = null,
     /** Beside the game (docked, the side panel): the companion fills its panel, whose width the shape already set. */
     fill: Boolean = false,
 ) {
@@ -624,7 +774,7 @@ fun CompanionPanel(
         val dpW = COMPANION_DP_H * aspect
         val density = min(px.first / dpW, px.second / COMPANION_DP_H)
         CompositionLocalProvider(LocalDensity provides Density(density)) {
-            Box(Modifier.size(dpW.dp, COMPANION_DP_H.dp)) { CompanionScreen(snap, slots = slots, settings = settings, back = back) }
+            Box(Modifier.size(dpW.dp, COMPANION_DP_H.dp)) { CompanionScreen(snap, slots = slots, settings = settings, back = back, keys = keys) }
         }
     }
 }
@@ -632,3 +782,27 @@ fun CompanionPanel(
 // The Thor's bottom screen in dp: 1240 x 1080 px at density 2.625.
 const val COMPANION_DP_W = 1240f / 2.625f
 const val COMPANION_DP_H = 1080f / 2.625f
+
+/** Key presses the desktop makes itself (a controller's A = Enter on what has the focus), let through untouched. */
+object Synthetic {
+    @Volatile var active = false
+
+    fun enter(w: java.awt.Window?) = press(w, java.awt.event.KeyEvent.VK_ENTER, '\n')
+    fun escape(w: java.awt.Window?) = press(w, java.awt.event.KeyEvent.VK_ESCAPE, 27.toChar())
+
+    private fun press(w: java.awt.Window?, vk: Int, ch: Char) {
+        w ?: return
+        val target = w.focusOwner ?: w
+        active = true
+        try {
+            for (id in listOf(java.awt.event.KeyEvent.KEY_PRESSED, java.awt.event.KeyEvent.KEY_RELEASED))
+                target.dispatchEvent(java.awt.event.KeyEvent(target, id, System.currentTimeMillis(), 0, vk, ch))
+        } finally { active = false }
+    }
+}
+
+/** While [on], the focus can't leave this box (the D-pad stops at its edge), and its children are one group. */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+fun Modifier.trapFocus(on: Boolean): Modifier = this
+    .focusProperties { if (on) exit = { androidx.compose.ui.focus.FocusRequester.Cancel } }
+    .focusGroup()
