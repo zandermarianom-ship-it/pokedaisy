@@ -85,14 +85,19 @@ fun runDesktop(rom: File?) {
     DesktopHost.open(com.pokedaisy.app.LibraryActivity::class.java)
     rom?.let(DesktopHost::startGame)
     application {
-        if (DesktopHost.game == null) DesktopHost.screens.forEachIndexed { i, screen ->
-            key(screen) {
-                Window(
-                    onCloseRequest = { if (i == 0) exitApplication() else screen.activity.finish() },
-                    title = screen.title,
-                    state = rememberWindowState(size = DpSize(1280.dp, 720.dp), position = WindowPosition(60.dp + (i * 30).dp, 40.dp + (i * 30).dp)),
-                ) { ActivityScreen(screen) }
-            }
+        // One window: the screen on top of the stack (Library, then Settings over it, ...), like the phone's screen.
+        // Closing it, or Esc, goes back a screen; on the Library it quits.
+        val top = DesktopHost.screens.lastOrNull()
+        if (DesktopHost.game == null && top != null) {
+            val back = { if (DesktopHost.screens.size <= 1) exitApplication() else top.activity.finish() }
+            Window(
+                onCloseRequest = back,
+                title = top.title,
+                state = rememberWindowState(size = DpSize(1280.dp, 720.dp), position = WindowPosition(60.dp, 40.dp)),
+                onPreviewKeyEvent = {
+                    if (it.type == KeyEventType.KeyDown && it.key == Key.Escape && DesktopHost.screens.size > 1) { back(); true } else false
+                },
+            ) { key(top) { ActivityScreen(top) } }
         }
         DesktopHost.game?.let { g -> key(g) { GameWindows(g) } }
     }

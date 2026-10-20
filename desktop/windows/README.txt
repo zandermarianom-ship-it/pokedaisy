@@ -15,7 +15,8 @@ PLAY
   Double-click PokeDaisy.bat. The Library opens: add your ROMs folder (the folder button / first-time setup, or
   Settings > FOLDERS), then pick a game. You can also drag a ROM onto PokeDaisy.bat to start it straight away.
   Windows may warn about an unknown app the first time: "More info" -> "Run anyway".
-  Closing the game's window takes you back to the Library.
+  Settings opens in the same window: its back arrow, Esc or closing the window goes back to the Library.
+  Game > Close game, or closing the game's window, takes you back to the Library.
 
 COMPANION
   It sits beside the game. View > Companion (or F2) pops it out into its own window - put that on your second
