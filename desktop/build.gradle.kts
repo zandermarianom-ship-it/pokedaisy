@@ -86,7 +86,7 @@ val packageWindows = tasks.register<Sync>("packageWindows") {
     from(windowsSkia) { into("lib") }
     from(rootDir.resolve("native/build-win/pokedaisy.dll")) { into("native") }
     from(rootDir.resolve("../app/src/main/assets")) { into("assets") }
-    from(rootDir.resolve("windows")) { include("PokeDaisy.bat", "README.txt") }
+    from(rootDir.resolve("windows")) { include("PokeDaisy.bat", "PokeDaisy-debug.bat", "README.txt") }
     from(rootDir.resolve("../LICENSE")) { rename { "LICENSE.txt" } }
     doFirst { require(rootDir.resolve("native/build-win/pokedaisy.dll").isFile) { "build native/build-win first (see README.md)" } }
 }

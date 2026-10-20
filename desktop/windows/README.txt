@@ -8,7 +8,8 @@ This is an unofficial prototype, not a release of PokeDaisy.
 FIRST TIME
   1. Unzip this whole folder somewhere (e.g. Documents\PokeDaisy). Don't run it from inside the zip.
   2. You need Java 17 or newer. If you don't have it, PokeDaisy.bat opens the free download page:
-     install the Windows x64 "JRE" .msi and tick "Set JAVA_HOME" in the installer.
+     install the Windows x64 "JRE" .msi. An older Java (e.g. Java 8) can stay installed:
+     PokeDaisy.bat looks for the newest Java 17+ and skips older ones.
 
 PLAY
   Double-click PokeDaisy.bat and pick your ROM (.gba), or drag the ROM onto PokeDaisy.bat.
@@ -28,4 +29,5 @@ NOT YET
   (battle buttons, USE, FLY), settings.
 
 PROBLEMS
-  userdata\pokedaisy.log says what went wrong - send it along.
+  Run PokeDaisy-debug.bat instead: it shows which Java it uses and every error in a window
+  that stays open. userdata\pokedaisy.log and userdata\launcher.log say what went wrong too.
