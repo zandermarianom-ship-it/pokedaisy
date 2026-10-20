@@ -17,6 +17,9 @@ BATOCERA
      \\BATOCERA\share\system\pokedaisy  (that's /userdata/system/pokedaisy on the box).
   2. Copy batocera/PokeDaisy.sh to \\BATOCERA\share\roms\ports\
   3. In Batocera: Game settings > Update gamelists. PokeDaisy is under Ports.
+  4. (Optional) Start games straight from the menu: copy batocera/es_systems_pokedaisy.cfg to
+     \\BATOCERA\share\system\configs\emulationstation\ and restart Batocera. A PokeDaisy system appears beside
+     GBA with the same games and pictures; picking one plays it in PokeDaisy, and HOTKEY + START goes back to the list.
   The first start lists your GBA games (roms/gba) and keeps saves with RetroArch's (saves/gba, .srm), so a game saved
   in PokeDaisy continues in RetroArch and back. Everything else is in system/pokedaisy/userdata (batocera.log if it
   doesn't start).
@@ -26,9 +29,9 @@ CONTROLLER (any pad SDL knows: Xbox, PlayStation, 8BitDo, Switch...; buttons by 
             SELECT = sort, SELECT + START = quit PokeDaisy
   Game:     D-pad / left stick, A, B, L, R, START, SELECT = the GBA's
             X (top) = the HUD's cursor: D-pad picks a button, A presses it, B leaves
-            Y (left) or Home = the companion in / out: D-pad moves, A presses, B goes back, L / R change tabs
+            Y (left) or Home (tap) = the companion in / out: D-pad moves, A presses, B goes back, L / R change tabs
             RT (hold) = fast-forward, LT = fast-forward on / off, R3 = widescreen (EXPAND) on / off
-            SELECT + START = back to the Library
+            SELECT + START or HOTKEY (Home) + START = back to the Library (to Batocera's list if started from it)
 
 KEYBOARD
   Arrows = D-pad   X = A   Z = B   Enter = Start   Backspace = Select   A = L   S = R

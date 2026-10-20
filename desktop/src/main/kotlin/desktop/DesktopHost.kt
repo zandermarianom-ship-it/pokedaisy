@@ -82,7 +82,9 @@ object DesktopHost {
     fun endGame() {
         val g = game ?: return
         game = null
-        g.stop()
+        g.stop()   // the game's save written out first (pkFinishSave), then the core goes
+        // Started for one game from Batocera's game list: leaving it goes back there, not to the Library.
+        if (System.getProperty("pokedaisy.quitAfterGame") == "true") System.exit(0)
         if (screens.isEmpty()) open(com.pokedaisy.app.LibraryActivity::class.java)
         else screens.last().activity.onResume()
     }

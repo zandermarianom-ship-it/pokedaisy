@@ -100,11 +100,26 @@ object Gamepad {
         }, "gamepad").apply { isDaemon = true; start() }
     }
 
+    /** HOME / GUIDE went down and nothing was pressed with it yet: on its release it's a press of its own. */
+    @Volatile private var guideAlone = false
+
     private fun post(b: Btn, down: Boolean, repeat: Boolean) {
         val l = listener ?: return
+        fun send(btn: Btn, d: Boolean) =
+            SwingUtilities.invokeLater { runCatching { l(btn, d, false) }.onFailure { it.printStackTrace() } }
+        // Batocera's hotkey (HOME on most pads): alone it's its own button, sent when let go; with START, the way out.
+        if (b == Btn.GUIDE) {
+            if (down && !repeat) guideAlone = true
+            else if (!down && guideAlone) { guideAlone = false; send(Btn.GUIDE, true); send(Btn.GUIDE, false) }
+            return
+        }
+        if (down && Btn.GUIDE in held) {
+            guideAlone = false
+            if (b == Btn.START && !repeat) { send(Btn.EXIT, true); return }
+        }
         // SELECT + START: the second one's press is the combo, not a button of its own.
         if (down && !repeat && (b == Btn.START && Btn.BACK in held || b == Btn.BACK && Btn.START in held)) {
-            SwingUtilities.invokeLater { runCatching { l(Btn.EXIT, true, false) }.onFailure { it.printStackTrace() } }
+            send(Btn.EXIT, true)
             return
         }
         SwingUtilities.invokeLater { runCatching { l(b, down, repeat) }.onFailure { it.printStackTrace() } }

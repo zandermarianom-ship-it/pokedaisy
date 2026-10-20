@@ -110,7 +110,7 @@ class Emulator(val rom: File, val save: File?) {
             frames++
             if (shown) {
                 publish()
-                audio?.let { drainAudio(it) } ?: MgbaCore.pkReadAudio(audioBuf)
+                audio?.let { drainAudio(it, n > 1) } ?: MgbaCore.pkReadAudio(audioBuf)
             } else MgbaCore.pkReadAudio(audioBuf)
             if (frames % SAMPLE_EVERY == 0L) runCatching {
                 val snap = store.refresh()
@@ -179,7 +179,25 @@ class Emulator(val rom: File, val save: File?) {
     private val audioBuf = ShortArray(8192)
     private val audioBytes = ByteArray(audioBuf.size * 2)
 
-    private fun drainAudio(line: SourceDataLine) {
+    /** The sound card's queue ran dry this many times (logged now and then: the dropouts' count). */
+    private var underruns = 0
+    private var audioStarted = false
+
+    /**
+     * This frame's sound to the card. At 1x the game's own pace and the card's never quite agree, so, like RetroArch, the
+     * core's resampling rate is nudged (up to 0.5%) to keep the card's queue about half full - no overflow to drop, no
+     * dry queue to click; a write that doesn't fit waits (the game is ahead). Fast-forward drops what doesn't fit.
+     */
+    private fun drainAudio(line: SourceDataLine, ff: Boolean) {
+        val size = line.bufferSize
+        val queued = size - line.available()
+        if (audioStarted && queued <= 0) {
+            // It ran dry (a hiccup): the cushion back before going on, rather than a crackle every frame after.
+            if (++underruns % 20 == 1) println("sound: queue ran dry ($underruns so far)")
+            silence(line, size / 2)
+        }
+        val fill = queued.toDouble() / size
+        MgbaCore.pkSetAudioRate(if (ff) RATE.toDouble() else RATE * (1.0 + MAX_RATE_SKEW * (0.5 - fill) * 2))
         val n = MgbaCore.pkReadAudio(audioBuf)
         if (n <= 0) return
         for (i in 0 until n) {
@@ -187,14 +205,28 @@ class Emulator(val rom: File, val save: File?) {
             audioBytes[i * 2] = s.toByte()
             audioBytes[i * 2 + 1] = (s shr 8).toByte()
         }
-        // Never block the frame loop on the sound card: drop what doesn't fit.
-        val len = minOf(n * 2, line.available() and 3.inv())
-        if (len > 0) line.write(audioBytes, 0, len)
+        audioStarted = true
+        if (ff) {
+            val len = minOf(n * 2, line.available() and 3.inv())
+            if (len > 0) line.write(audioBytes, 0, len)
+        } else line.write(audioBytes, 0, n * 2 and 3.inv())
     }
 
+    private fun silence(line: SourceDataLine, bytes: Int) {
+        val z = ByteArray(bytes and 3.inv())
+        line.write(z, 0, minOf(z.size, line.available() and 3.inv()))
+    }
+
+    /** A queue of [AUDIO_MS], started half full of silence so the first frames' jitter has room. */
     private fun openAudio(rate: Int): SourceDataLine? = runCatching {
         val fmt = AudioFormat(rate.toFloat(), 16, 2, true, false)
-        AudioSystem.getSourceDataLine(fmt).apply { open(fmt, rate / 5 * 4); start() }
+        AudioSystem.getSourceDataLine(fmt).apply {
+            open(fmt, rate * 4 * AUDIO_MS / 1000)
+            audioStarted = false
+            silence(this, bufferSize / 2)
+            start()
+            println("sound: ${rate} Hz, ${bufferSize * 1000 / (rate * 4)} ms queue")
+        }
     }.onFailure { println("no sound: ${it.message}") }.getOrNull()
 
     private fun publish() {
@@ -229,6 +261,11 @@ class Emulator(val rom: File, val save: File?) {
         const val WIDE_W = 284
         const val FRAME_NANOS = 16_742_706L // 280896 cycles at 16.78 MHz: 59.7275 frames a second
         const val SAMPLE_EVERY = 30L
+        /** The core's sample rate (pokedaisy_jni.c's PK_SAMPLE_RATE). */
+        const val RATE = 48000
+        /** The sound card's queue: ~80 ms of it kept filled (Batocera's PipeWire takes ~20 ms at a time). */
+        const val AUDIO_MS = 160
+        const val MAX_RATE_SKEW = 0.005
         /** Frames of plain field before the HUD comes on (~1/3 s), as on Android. */
         const val FIELD_SETTLE_FRAMES = 20
     }

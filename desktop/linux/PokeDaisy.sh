@@ -2,7 +2,7 @@
 # PokeDaisy for Linux (x86_64): the Library, the game and its companion. Run it from anywhere:
 #   ./PokeDaisy.sh [game.gba]
 # PD_FULLSCREEN=1 starts full screen (a TV, Batocera), PD_DEBUG=1 logs to the terminal instead of userdata/pokedaisy.log,
-# PD_SOFTWARE=1 draws without OpenGL (if the window stays black).
+# PD_QUIT_AFTER_GAME=1 quits when the game closes (a game started from a frontend), PD_SOFTWARE=1 draws without OpenGL (if the window stays black).
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
 # The bundled Java (a copy unzipped on Windows loses its run permission), else the system's.
@@ -22,6 +22,7 @@ export DISPLAY="${DISPLAY:-:0.0}"
 [ -n "$PD_SOFTWARE" ] && export SKIKO_RENDER_API=SOFTWARE
 OPTS=(-Xmx1g -Djava.library.path="$HERE/native" -Dscratch="$HERE/userdata" -Dsun.java2d.uiScale.enabled=true)
 [ -n "$PD_FULLSCREEN" ] && OPTS+=(-Dpokedaisy.fullscreen=true)
+[ -n "$PD_QUIT_AFTER_GAME" ] && OPTS+=(-Dpokedaisy.quitAfterGame=true)
 [ -z "$PD_DEBUG" ] && OPTS+=(-Dlogfile="$HERE/userdata/pokedaisy.log")
 mkdir -p "$HERE/userdata"
 # The app's fonts are read from assets/.
