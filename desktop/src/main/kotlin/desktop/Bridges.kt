@@ -204,18 +204,3 @@ class DesktopSlots(private val emu: Emulator, dir: File) : StateSlots {
         emu.post { if (beforeLoad.isFile) MgbaCore.pkLoadState(beforeLoad.absolutePath); version++ }
     }
 }
-
-/** Every start copies the save to userdata/save-backups first (the newest 10 kept), like the Android app. */
-fun backUpSave(save: File, backups: File) {
-    if (!save.isFile || save.length() == 0L) return
-    backups.mkdirs()
-    val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(java.util.Date())
-    val copy = File(backups, "${save.nameWithoutExtension}.$stamp.${save.extension}")
-    // The same bytes as the newest backup: nothing new to keep.
-    val newest = backups.listFiles { f -> f.name.startsWith(save.nameWithoutExtension + ".") }?.maxByOrNull { it.lastModified() }
-    if (newest != null && newest.readBytes().contentEquals(save.readBytes())) return
-    save.copyTo(copy, overwrite = true)
-    backups.listFiles { f -> f.name.startsWith(save.nameWithoutExtension + ".") }
-        ?.sortedByDescending { it.lastModified() }?.drop(10)?.forEach { it.delete() }
-    println("save backed up to ${copy.path}")
-}

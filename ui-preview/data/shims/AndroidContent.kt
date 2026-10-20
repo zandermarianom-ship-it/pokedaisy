@@ -32,7 +32,8 @@ open class Context {
     }
 }
 
-/** In-memory, process-wide. */
+/** In-memory, process-wide - and kept in a file between runs when the `prefsFile` system property names one
+ * (the desktop app; ui-preview leaves it unset, so its shots start from the same values every time). */
 class SharedPreferences {
     val m = HashMap<String, Any?>()
     fun getString(k: String, d: String?) = (m[k] as String?) ?: d
@@ -50,8 +51,49 @@ class SharedPreferences {
         fun putBoolean(k: String, v: Boolean) = apply { p.m[k] = v }
         fun putLong(k: String, v: Long) = apply { p.m[k] = v }
         fun remove(k: String) = apply { p.m.remove(k) }
-        fun apply() {}
-        fun commit() = true
+        fun apply() = p.save()
+        fun commit() = true.also { p.save() }
+    }
+
+    private val file: java.io.File? = System.getProperty("prefsFile")?.let { java.io.File(it) }
+
+    init {
+        // One line per key: <type letter><tab><key><tab><value, with \ \n \t escaped>.
+        file?.takeIf { it.isFile }?.readLines()?.forEach { line ->
+            val parts = line.split('\t', limit = 3)
+            if (parts.size < 3) return@forEach
+            val v = unescape(parts[2])
+            m[parts[1]] = when (parts[0]) {
+                "s" -> v; "i" -> v.toIntOrNull(); "f" -> v.toFloatOrNull(); "b" -> v.toBoolean(); "l" -> v.toLongOrNull(); else -> null
+            }
+        }
+    }
+
+    @Synchronized fun save() {
+        val f = file ?: return
+        val text = m.entries.mapNotNull { (k, v) ->
+            val type = when (v) { is String -> "s"; is Int -> "i"; is Float -> "f"; is Boolean -> "b"; is Long -> "l"; else -> return@mapNotNull null }
+            "$type\t${escape(k)}\t${escape(v.toString())}"
+        }.joinToString("\n")
+        runCatching {
+            f.parentFile?.mkdirs()
+            val tmp = java.io.File(f.path + ".tmp")
+            tmp.writeText(text)
+            if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f) }
+        }
+    }
+
+    private fun escape(s: String) = s.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+    private fun unescape(s: String): String {
+        val b = StringBuilder()
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '\\' && i + 1 < s.length) {
+                b.append(when (s[i + 1]) { 'n' -> '\n'; 't' -> '\t'; else -> s[i + 1] }); i += 2
+            } else { b.append(c); i++ }
+        }
+        return b.toString()
     }
 
     companion object { val shared = SharedPreferences() }

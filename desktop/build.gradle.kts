@@ -25,7 +25,9 @@ val prepSrc = tasks.register<Sync>("prepSrc") {
             .replace("icons.automirrored.filled.", "icons.filled.")
     }
 }
-sourceSets["main"].kotlin.srcDir("../ui-preview/src/shims")
+// The desktop's own copy of ui-preview's Android stand-ins, with real behaviour where the Library / Settings need it
+// (activities in windows, file and folder pickers, links): see shims/README.md.
+sourceSets["main"].kotlin.srcDir("shims")
 tasks.withType<KotlinCompile>().configureEach {
     source(files(layout.buildDirectory.dir("appsrc")).builtBy(prepSrc))
     kotlinOptions.jvmTarget = "17"

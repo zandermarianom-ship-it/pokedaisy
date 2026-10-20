@@ -1,6 +1,9 @@
 package desktop
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.window.ApplicationScope
+import androidx.compose.runtime.key
 import com.pokedaisy.app.companion.GameAspect
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.FrameWindowScope
@@ -51,13 +54,8 @@ import com.pokedaisy.app.companion.ui.CompanionScreen
 import java.io.File
 import kotlin.math.min
 
-/** PokeDaisy desktop prototype: `run -Prom=game.gba [-Psave=game.sav]` opens the game and the companion. */
-fun main(args: Array<String>) {
-    val rom = File(args.firstOrNull() ?: error("usage: desktop <rom.gba> [save]")).absoluteFile
-    require(rom.isFile) { "no ROM at $rom" }
-    val save = args.getOrNull(1)?.let(::File) ?: defaultSave(rom)
-    play(rom, save)
-}
+/** PokeDaisy desktop: `run [-Prom=game.gba]` opens the Library (and the game, if one is given). */
+fun main(args: Array<String>) = runDesktop(args.firstOrNull()?.let { File(it).absoluteFile })
 
 /** Opened by double-click (PokeDaisy.bat): no console, so errors show as a window and everything is logged. */
 fun startDesktop(args: Array<String>) {
@@ -67,15 +65,60 @@ fun startDesktop(args: Array<String>) {
         System.setErr(log)
     }
     try {
-        val rom = args.firstOrNull()?.let(::File) ?: pickRom() ?: return
-        require(rom.isFile) { "No ROM at $rom" }
-        play(rom.absoluteFile, args.getOrNull(1)?.let(::File) ?: defaultSave(rom.absoluteFile))
+        runDesktop(args.firstOrNull()?.let { File(it).absoluteFile })
     } catch (t: Throwable) {
         t.printStackTrace()
         showError("PokeDaisy couldn't start:\n\n$t\n\nDetails are in ${System.getProperty("logfile") ?: "the console"}.")
         System.exit(1)
     }
 }
+
+/** The data folder (userdata/ beside PokeDaisy.bat): settings, art rebuilt from ROMs, save states. */
+val userdata: File get() = File(System.getProperty("scratch") ?: System.getProperty("java.io.tmpdir")).absoluteFile
+
+/** The Library window (the app's own LibraryActivity), and a game window whenever one is playing. */
+fun runDesktop(rom: File?) {
+    // The app's settings (Prefs) kept between runs - set before anything reads them.
+    if (System.getProperty("prefsFile") == null) System.setProperty("prefsFile", File(userdata, "settings.txt").path)
+    runCatching { javax.swing.UIManager.setLookAndFeel(javax.swing.UIManager.getSystemLookAndFeelClassName()) }
+    createSharedUiState()
+    DesktopHost.open(com.pokedaisy.app.LibraryActivity::class.java)
+    rom?.let(DesktopHost::startGame)
+    application {
+        if (DesktopHost.game == null) DesktopHost.screens.forEachIndexed { i, screen ->
+            key(screen) {
+                Window(
+                    onCloseRequest = { if (i == 0) exitApplication() else screen.activity.finish() },
+                    title = screen.title,
+                    state = rememberWindowState(size = DpSize(1280.dp, 720.dp), position = WindowPosition(60.dp + (i * 30).dp, 40.dp + (i * 30).dp)),
+                ) { ActivityScreen(screen) }
+            }
+        }
+        DesktopHost.game?.let { g -> key(g) { GameWindows(g) } }
+    }
+    System.exit(0)
+}
+
+/** An activity's content laid out as on the top screen it was made for (1920 x 1080 at density 2.5), scaled to the window. */
+@Composable
+fun ActivityScreen(screen: DesktopHost.Screen) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        val px = with(LocalDensity.current) { Pair(maxWidth.toPx(), maxHeight.toPx()) }
+        val density = min(px.first / SCREEN_DP_W, px.second / SCREEN_DP_H)
+        CompositionLocalProvider(LocalDensity provides Density(density)) {
+            Box(Modifier.size(SCREEN_DP_W.dp, SCREEN_DP_H.dp)) { screen.content() }
+        }
+        DesktopHost.notice?.let { Notice(it) }
+    }
+}
+
+@Composable
+fun Notice(text: String) = Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.BottomCenter) {
+    Text(text, color = Color.White, modifier = Modifier.background(Color(0xE0202028)).padding(horizontal = 16.dp, vertical = 10.dp))
+}
+
+const val SCREEN_DP_W = 1920f / 2.5f
+const val SCREEN_DP_H = 1080f / 2.5f
 
 /** The open-a-ROM window (the system's own file dialog); null if cancelled. */
 fun pickRom(): File? {
@@ -97,66 +140,66 @@ fun showError(message: String) {
         javax.swing.JOptionPane.showMessageDialog(null, message, "PokeDaisy", javax.swing.JOptionPane.ERROR_MESSAGE)
 }
 
-/**
- * The game for [rom]: one window with the companion beside the game by default; View > Companion (or F2) pops the
- * companion out into a window of its own for a second monitor and back, F3 hides / shows it.
- */
-fun play(rom: File, save: File) {
-    println("ROM ${rom.path}, save ${save.path}")
-    val files = android.content.Context().filesDir
-    val userdata = files.parentFile
-    backUpSave(save, File(userdata, "save-backups"))
-    prepareArt(rom)
-    createSharedUiState()
-
+/** A game being played: its emulator, its companion's bridges and where the companion is. Ends with [onEnd]. */
+class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
     val config = DesktopConfig(File(userdata, "desktop.properties"))
     val emu = Emulator(rom, save)
     var crash by mutableStateOf<Throwable?>(null)
-    emu.start(sound = true) { crash = it; it.printStackTrace() }
-
     var place by mutableStateOf(runCatching { CompanionPlace.valueOf(config.get("companion") ?: "") }.getOrDefault(CompanionPlace.DOCKED))
+        private set
+    val settings = DesktopSettings(emu, config, onClose = { onEnd() }, onHideCompanion = { moveCompanion(CompanionPlace.HIDDEN) })
+    val slots = DesktopSlots(emu, File(userdata, "states"))
+
+    init {
+        println("ROM ${rom.path}, save ${save.path}")
+        prepareArt(rom)
+        emu.start(sound = true) { crash = it; it.printStackTrace() }
+    }
+
     fun moveCompanion(to: CompanionPlace) { place = to; config.set("companion", to.name) }
+    fun stop() = emu.stop()
+}
 
-    application {
-        val exit = { emu.stop(); exitApplication() }
-        val settings = remember { DesktopSettings(emu, config, onClose = exit, onHideCompanion = { moveCompanion(CompanionPlace.HIDDEN) }) }
-        val slots = remember { DesktopSlots(emu, File(userdata, "states")) }
-        val keys = { e: KeyEvent -> gameKey(emu, e, settings, slots, place, ::moveCompanion) }
-        val snap by emu.store.snapshot.collectAsState()
-
-        Window(
-            onCloseRequest = exit,
-            title = "PokeDaisy - ${rom.nameWithoutExtension}",
-            state = rememberWindowState(size = DpSize(1600.dp, 760.dp), position = WindowPosition(30.dp, 30.dp)),
-            onPreviewKeyEvent = keys,
-        ) {
-            GameMenus(settings, slots, place, ::moveCompanion, exit)
-            BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-                // Docked: the companion takes up to 40% of the width at its own shape, the game the rest.
-                val companionW = if (place == CompanionPlace.DOCKED) minOf(maxWidth * 0.4f, maxHeight * (COMPANION_DP_W / COMPANION_DP_H)) else 0.dp
-                Row(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f).fillMaxHeight()) { GameScreen(emu, crash) }
-                    if (place == CompanionPlace.DOCKED) Box(Modifier.width(companionW).fillMaxHeight()) {
-                        CompanionPanel(snap, settings, slots)
-                    }
+/**
+ * The game: one window with the companion beside it by default; View > Companion (or F2) pops the companion out into
+ * a window of its own for a second monitor and back, F3 hides / shows it. Closing the game goes back to the Library.
+ */
+@Composable
+fun ApplicationScope.GameWindows(g: GameSession) {
+    val keys = { e: KeyEvent -> gameKey(g.emu, e, g.settings, g.slots, g.place, g::moveCompanion) }
+    val snap by g.emu.store.snapshot.collectAsState()
+    Window(
+        onCloseRequest = g.onEnd,
+        title = "PokeDaisy - ${g.rom.nameWithoutExtension}",
+        state = rememberWindowState(size = DpSize(1600.dp, 760.dp), position = WindowPosition(30.dp, 30.dp)),
+        onPreviewKeyEvent = keys,
+    ) {
+        GameMenus(g.settings, g.slots, g.place, g::moveCompanion, g.onEnd)
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+            // Docked: the companion takes up to 40% of the width at its own shape, the game the rest.
+            val companionW = if (g.place == CompanionPlace.DOCKED) minOf(maxWidth * 0.4f, maxHeight * (COMPANION_DP_W / COMPANION_DP_H)) else 0.dp
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxHeight()) { GameScreen(g.emu, g.crash) }
+                if (g.place == CompanionPlace.DOCKED) Box(Modifier.width(companionW).fillMaxHeight()) {
+                    CompanionPanel(snap, g.settings, g.slots)
                 }
             }
         }
-        if (place == CompanionPlace.WINDOW) Window(
-            // Closing it puts the companion back beside the game, rather than ending the game.
-            onCloseRequest = { moveCompanion(CompanionPlace.DOCKED) },
-            title = "PokeDaisy - companion (close to put it back beside the game)",
-            state = rememberWindowState(size = DpSize(700.dp, 640.dp), position = WindowPosition(1660.dp, 30.dp)),
-            onPreviewKeyEvent = keys,
-        ) {
-            MenuBar {
-                Menu("Companion") {
-                    Item("Put back beside the game (F2)", onClick = { moveCompanion(CompanionPlace.DOCKED) })
-                    Item("Hide (F3)", onClick = { moveCompanion(CompanionPlace.HIDDEN) })
-                }
+    }
+    if (g.place == CompanionPlace.WINDOW) Window(
+        // Closing it puts the companion back beside the game, rather than ending the game.
+        onCloseRequest = { g.moveCompanion(CompanionPlace.DOCKED) },
+        title = "PokeDaisy - companion (close to put it back beside the game)",
+        state = rememberWindowState(size = DpSize(700.dp, 640.dp), position = WindowPosition(1660.dp, 30.dp)),
+        onPreviewKeyEvent = keys,
+    ) {
+        MenuBar {
+            Menu("Companion") {
+                Item("Put back beside the game (F2)", onClick = { g.moveCompanion(CompanionPlace.DOCKED) })
+                Item("Hide (F3)", onClick = { g.moveCompanion(CompanionPlace.HIDDEN) })
             }
-            CompanionPanel(snap, settings, slots)
         }
+        CompanionPanel(snap, g.settings, g.slots)
     }
 }
 
@@ -175,7 +218,7 @@ fun FrameWindowScope.GameMenus(
         CheckboxItem("Fast-forward (Tab, or hold Space)", checked = settings.ffToggled, onCheckedChange = { settings.setFfToggled(it) })
         Separator()
         Item("Restart game", onClick = { settings.restartGame() })
-        Item("Quit", onClick = exit)
+        Item("Close game (back to the Library)", onClick = exit)
     }
     Menu("View") {
         RadioButtonItem("Companion beside the game (F2)", selected = place == CompanionPlace.DOCKED, onClick = { moveCompanion(CompanionPlace.DOCKED) })
@@ -223,12 +266,16 @@ fun defaultSave(rom: File): File {
 fun prepareArt(rom: File) {
     val files = android.content.Context().filesDir
     val dir = RomArt.dir(files)
-    if (!RomArt.OUTPUTS.all { File(dir, it).isFile }) {
+    val crc = com.pokedaisy.app.SaveStates.crc32(rom)
+    // Once per ROM, as on Android: a hack's own art (its map, its party slots) joins what other ROMs gave.
+    val scanned = File(dir, "scanned-$crc-v${RomArt.SCAN_VERSION}")
+    if (!scanned.isFile) {
         val wrote = RomArt.extractTo(rom.readBytes(), dir)
         println("companion art: ${wrote.size} files from ${rom.name}")
+        runCatching { scanned.writeText(rom.name) }
     }
     // A FireRed-engine hack's own region map (Unbound, Odyssey...), read from its ROM as the app does at launch.
-    RomRegionMap.current = RomRegionMap.loadNow(files, com.pokedaisy.app.SaveStates.crc32(rom), rom)
+    RomRegionMap.current = RomRegionMap.loadNow(files, crc, rom)
 }
 
 /**
@@ -255,6 +302,7 @@ fun gameKey(
         Key.Spacebar -> { emu.ffHeld = down; return true }
         else -> {
             if (!down) return e.key in HOTKEYS
+            if (e.key in HOTKEYS) println("hotkey ${e.key}")
             when (e.key) {
                 Key.E -> settings.setGameAspect(if (settings.gameAspect == GameAspect.WIDE) GameAspect.ORIGINAL else GameAspect.WIDE)
                 Key.Tab -> settings.setFfToggled(!settings.ffToggled)
