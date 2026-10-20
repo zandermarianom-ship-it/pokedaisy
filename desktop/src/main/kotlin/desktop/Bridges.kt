@@ -30,8 +30,21 @@ class DesktopConfig(private val file: File) {
     fun bool(key: String, default: Boolean) = get(key)?.toBooleanStrictOrNull() ?: default
 }
 
-/** Where the companion is: beside the game in its window, in a window of its own (a second monitor), or hidden. */
-enum class CompanionPlace { DOCKED, WINDOW, HIDDEN }
+/** Where the companion is: beside the game in its window, in a window of its own (a second monitor), hidden, or
+ * popped up over the game (the phone's one-screen window: Esc, like the phone's BACK). */
+enum class CompanionPlace { DOCKED, WINDOW, HIDDEN, POPUP }
+
+/** The companion's shape (width / height); null = whatever its area is. */
+enum class CompanionShape(val label: String, val aspect: Float?) {
+    THOR("Thor bottom screen (1240 x 1080)", 1240f / 1080f),
+    FOUR_THREE("4:3", 4f / 3f),
+    SIXTEEN_TEN("16:10", 16f / 10f),
+    WIDE("16:9", 16f / 9f),
+    FILL("Fill its area", null),
+}
+
+/** How the game's window sits on its monitor. */
+enum class DisplayMode(val label: String) { WINDOWED("Windowed"), BORDERLESS("Borderless (fills the monitor)"), FULLSCREEN("Full screen") }
 
 /** The keyboard, as the companion's GAME BUTTONS / HOTKEYS rows show it (fixed for now: no rebinding yet). */
 val DESKTOP_BUTTONS = mapOf(
@@ -57,6 +70,10 @@ class DesktopSettings(
     private val config: DesktopConfig,
     private val onClose: () -> Unit,
     private val onHideCompanion: () -> Unit,
+    private val companionOwnWindow: () -> Boolean = { false },
+    private val setCompanionOwnWindow: (Boolean) -> Unit = {},
+    private val swap: () -> Boolean = { false },
+    private val setSwap: (Boolean) -> Unit = {},
 ) : CompanionSettings {
     private var aspectState by mutableStateOf(
         runCatching { GameAspect.valueOf(config.get("aspect") ?: "") }.getOrDefault(GameAspect.WIDE)
@@ -107,6 +124,38 @@ class DesktopSettings(
     override fun closeGame() = onClose()
     override val canCloseCompanion get() = true
     override fun closeCompanion() = onHideCompanion()
+
+    // SCREEN: a PC can always put a window on another monitor, so SINGLE SCREEN (off = the companion in a window of its
+    // own) and SWAP SCREENS (the game on the second monitor) always show.
+    override val hasSecondScreen get() = true
+    override val singleScreen get() = !companionOwnWindow()
+    override fun setSingleScreen(on: Boolean) = setCompanionOwnWindow(!on)
+    override val swapScreens get() = swap()
+    override fun setSwapScreens(on: Boolean) = setSwap(on)
+
+    // HUD: the app's own setting and style (Prefs), so the Library's Settings and the companion's agree.
+    private val prefs = com.pokedaisy.app.Prefs(android.content.Context())
+    private var hudOn by mutableStateOf(prefs.fieldHud)
+    private var hudStyle by mutableStateOf(prefs.fieldHudStyle)
+    override val fieldHud get() = hudOn
+    override fun setFieldHud(on: Boolean) { hudOn = on; prefs.fieldHud = on }
+    override val fieldHudStyle get() = hudStyle
+    override fun setFieldHudStyle(style: com.pokedaisy.app.companion.FieldHudStyle) { hudStyle = style; prefs.fieldHudStyle = style }
+
+    /** The desktop's COMPANION SHAPE (View menu): the companion's width / height wherever it is; FILL = its whole area. */
+    private var shapeState by mutableStateOf(runCatching { CompanionShape.valueOf(config.get("companionShape") ?: "") }.getOrDefault(CompanionShape.WIDE))
+    val companionShape get() = shapeState
+    fun setCompanionShape(s: CompanionShape) { shapeState = s; config.set("companionShape", s.name) }
+
+    /** The game window: WINDOWED, BORDERLESS (fills its monitor, no title bar) or FULLSCREEN (View menu, F11). */
+    private var modeState by mutableStateOf(runCatching { DisplayMode.valueOf(config.get("displayMode") ?: "") }.getOrDefault(DisplayMode.WINDOWED))
+    val displayMode get() = modeState
+    fun setDisplayMode(m: DisplayMode) { modeState = m; config.set("displayMode", m.name) }
+
+    /** COMPANION VIEW: the side panel (the desktop's default) or the window in the middle over the game. */
+    private var windowView by mutableStateOf(config.bool("companionWindowView", false))
+    override val companionWindow: Boolean? get() = windowView
+    override fun setCompanionWindow(on: Boolean) { windowView = on; config.set("companionWindowView", on.toString()) }
 
     // COMPANION
     override val showHints get() = hints

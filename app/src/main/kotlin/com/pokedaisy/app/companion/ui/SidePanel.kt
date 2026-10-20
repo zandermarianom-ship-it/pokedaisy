@@ -86,10 +86,11 @@ const val COMPACT_TEXT_INCHES = 2.5f
  * the Thor bottom screen's shape (1240x1080, so every tab lays out as it was made to) and wider on a wider screen (the
  * RP6's 16:9), narrower only where the screen is. Width x height, px.
  */
-fun companionWindowSize(widthPx: Int, heightPx: Int): Pair<Int, Int> {
+fun companionWindowSize(widthPx: Int, heightPx: Int, fixedAspect: Float? = null): Pair<Int, Int> {
     val h = (heightPx * WINDOW_HEIGHT).roundToInt()
-    // Wider on a wider screen (16:9 comes out ~1.39:1), never narrower than the Thor's bottom screen.
-    val aspect = (widthPx.toFloat() / heightPx * WIDE_SHARE).coerceIn(THOR_BOTTOM_ASPECT, MAX_WINDOW_ASPECT)
+    // Wider on a wider screen (16:9 comes out ~1.39:1), never narrower than the Thor's bottom screen. [fixedAspect]:
+    // the shape the player picked (the desktop's COMPANION SHAPE), the screen's width still the limit.
+    val aspect = fixedAspect ?: (widthPx.toFloat() / heightPx * WIDE_SHARE).coerceIn(THOR_BOTTOM_ASPECT, MAX_WINDOW_ASPECT)
     val w = min((widthPx * WINDOW_MAX_WIDTH).roundToInt(), (h * aspect).roundToInt())
     return w to h
 }
@@ -128,6 +129,8 @@ fun SidePanelHost(
      * puts it on the newest start ([FocusStarts]) when nothing in the companion has it yet. True = taken.
      */
     focusKeys: ((key: MenuKey, repeat: Boolean, start: () -> Unit) -> Boolean)? = null,
+    /** The window's width / height, when it's set (the desktop); null = from the screen's shape. */
+    windowAspect: Float? = null,
     content: @Composable () -> Unit,
 ) {
     val box = remember { IntArray(4) }   // the window's left / top / right / bottom, for the dim's taps
@@ -151,7 +154,7 @@ fun SidePanelHost(
         ),
     ) {
         val outer = LocalDensity.current
-        val (ww, wh) = companionWindowSize(constraints.maxWidth, constraints.maxHeight)
+        val (ww, wh) = companionWindowSize(constraints.maxWidth, constraints.maxHeight, windowAspect)
         // The window's chrome (frame, X, legend) at the companion's own scale.
         val chrome = Density(sidePanelDensity(ww, wh), outer.fontScale)
         Layout(
@@ -171,7 +174,7 @@ fun SidePanelHost(
         ) { measurables, constraints ->
             val w = constraints.maxWidth
             val h = constraints.maxHeight
-            val (cw, ch) = if (window) companionWindowSize(w, h) else w to h
+            val (cw, ch) = if (window) companionWindowSize(w, h, windowAspect) else w to h
             val companion = measurables[0].measure(Constraints.fixed(cw, ch))
             val close = measurables.getOrNull(1)?.measure(Constraints())
             val left = (w - cw) / 2

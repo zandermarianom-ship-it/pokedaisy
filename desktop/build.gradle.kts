@@ -53,6 +53,7 @@ fun JavaExec.desktopProps() {
     workingDir = rootDir.resolve("../app/src/main/assets")
     jvmArgs("-Djava.library.path=${nativeDir.absolutePath}")
     systemProperty("scratch", (project.findProperty("userdata")?.toString()) ?: layout.buildDirectory.dir("userdata").get().asFile.absolutePath)
+    project.findProperty("monitors")?.let { systemProperty("monitors", it.toString()) }
     args = listOfNotNull(project.findProperty("rom")?.toString(), project.findProperty("sav")?.toString())
 }
 

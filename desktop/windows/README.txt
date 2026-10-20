@@ -19,9 +19,21 @@ PLAY
   Game > Close game, or closing the game's window, takes you back to the Library.
 
 COMPANION
-  It sits beside the game. View > Companion (or F2) pops it out into its own window - put that on your second
-  monitor - and F2 again (or closing that window) puts it back. F3 hides / shows it.
-  Its SETTINGS tab changes ASPECT (EXPAND = widescreen), fast-forward and more; STATES has 10 save-state slots.
+  Like the phone app on a one-screen device: it starts locked beside the game. The padlock on its left edge
+  unlocks it; it then slides over the game's right side (the game keeps running) and the X under the padlock
+  slides it away. Esc, the HUD's COMPANION button or the tab on the right edge brings it back.
+  Locked or open, Esc is the companion's BACK (closes a sub-page, a summary...).
+  SETTINGS > COMPANION VIEW: SIDE PANEL (above) or WINDOW (framed in the middle of the game, like the phone's).
+  F2 puts it in a window of its own for a second monitor (F2 again puts it back), F3 hides / shows it.
+  View > Companion shape: 16:9 (default), 16:10, 4:3, the Thor's bottom screen, or fill its area.
+
+HUD
+  On the overworld the phone's HUD shows over the game: minimap, WILD, the bag's balls, COMPANION.
+  Its options are in the companion's SETTINGS > HUD (or View > HUD over the game).
+
+WINDOW
+  F10 = borderless (the game fills its monitor, no title bar or menus), F11 = full screen; the same keys go back.
+  View > Window has all three.
 
 SAVES
   Settings > FOLDERS picks where saves live (e.g. your Syncthing folder). Without that, the save next to the ROM
@@ -33,7 +45,8 @@ KEYS (game window)
   Arrows = D-pad   X = A   Z = B   Enter = Start   Backspace = Select   A = L   S = R
   E = EXPAND (widescreen) on / off      Space (hold) / Tab = fast-forward
   F5 / F7 = save / load state           F6 / F8 = previous / next slot
-  F2 = companion beside the game / in its own window      F3 = companion hidden / shown
+  Esc = companion in / out (and its BACK)   F2 = companion in its own window   F3 = hidden / shown
+  F10 = borderless   F11 = full screen
 
 NOT YET
   Controllers, rebinding keys, the companion's buttons that press the game (battle buttons, USE, FLY),

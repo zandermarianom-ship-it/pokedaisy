@@ -50,7 +50,9 @@ ROM. Every start backs the save up to `pokedaisy-backups/` first, as on Android.
 
 **Keys**: arrows, X = A, Z = B, Enter = START, Backspace = SELECT, A = L, S = R, E = EXPAND on / off,
 Space = hold fast-forward, Tab = fast-forward on / off, F5 / F7 = save / load state, F6 / F8 = state slot,
-F2 = companion docked / in its own window, F3 = hide it, Esc = back a screen in the Library / Settings.
+Esc = the companion's side panel in / out (as the phone's BACK), F2 = companion in its own window, F3 = hide it,
+F10 = borderless, F11 = full screen; Esc in the Library / Settings goes back a screen. The FIELD HUD shows over the
+field (SETTINGS > HUD), View > Companion shape sets its 16:9 / 16:10 / 4:3 / Thor / fill shape.
 
 ## Not done yet
 

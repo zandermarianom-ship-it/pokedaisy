@@ -4,6 +4,9 @@ import com.pokedaisy.app.MgbaCore
 import com.pokedaisy.app.SaveStates
 import com.pokedaisy.app.WideScreen
 import com.pokedaisy.app.companion.TelemetryStore
+import com.pokedaisy.app.companion.data.FfMenuWatch
+import com.pokedaisy.app.companion.data.InProcessReader
+import com.pokedaisy.app.companion.data.RegionMapWatch
 import java.awt.image.BufferedImage
 import java.io.File
 import java.nio.ByteOrder
@@ -53,6 +56,12 @@ class Emulator(val rom: File, val save: File?) {
     var frames = 0L
         private set
 
+    /** The player is on the field (no menu screen, region map or battle), settled for a moment: the HUD shows. As the
+     * app's EmulatorEngine.onField: FfMenuWatch's learned field screen, RegionMapWatch, the battle flag. */
+    val onField = kotlinx.coroutines.flow.MutableStateFlow(false)
+    private var fieldFrames = 0
+    private var gba = false
+
     @Volatile private var running = false
     private var thread: Thread? = null
     private var audio: SourceDataLine? = null
@@ -64,6 +73,16 @@ class Emulator(val rom: File, val save: File?) {
         val wide = WideScreen.gameFor(crc)
         expandKnown = wide != WideScreen.OFF
         MgbaCore.pkWideConfigure(wide)
+        gba = MgbaCore.pkPlatform() == 0
+        if (gba) runCatching {
+            // The game's own screens, found as the app finds them: the field's main callback (learned once, kept per
+            // ROM), the region map's pointers.
+            RegionMapWatch.load(rom)
+            val prefs = com.pokedaisy.app.Prefs(android.content.Context())
+            val (field, battle) = prefs.ffMenuCallbacks(crc)
+            FfMenuWatch.load(MgbaCore.pkRomCode().orEmpty(), field, battle)
+            FfMenuWatch.onLearned = { f, b -> prefs.setFfMenuCallbacks(crc, f, b) }
+        }.onFailure { println("field watch: $it") }
         // The wide window: 16:9 at the GBA's height, the game's own 240 px in the middle.
         val w = WIDE_W
         MgbaCore.pkWideSetView(-(w - GBA_W) / 2, 0, w, GBA_H)
@@ -90,8 +109,26 @@ class Emulator(val rom: File, val save: File?) {
                 publish()
                 audio?.let { drainAudio(it) } ?: MgbaCore.pkReadAudio(audioBuf)
             } else MgbaCore.pkReadAudio(audioBuf)
-            if (frames % SAMPLE_EVERY == 0L) runCatching { store.refresh() }.onFailure { println("companion sample failed: $it") }
+            if (frames % SAMPLE_EVERY == 0L) runCatching {
+                val snap = store.refresh()
+                store.knownGMain()?.let { (addr, off) -> FfMenuWatch.useKnownGMain(addr, off) }
+                if (snap.connected) FfMenuWatch.notePosition(snap.x, snap.y, snap.mapGroup, snap.mapNum, snap.inBattle)
+            }.onFailure { println("companion sample failed: $it") }
+            if (shown) watchField()
         }
+    }
+
+    /** The HUD's field check, once a shown frame (EmulatorEngine's, less what the desktop doesn't have). */
+    private fun watchField() {
+        if (!gba) return
+        val field = runCatching {
+            val mapOpen = RegionMapWatch.isOpen(InProcessReader)
+            FfMenuWatch.tick(InProcessReader)
+            FfMenuWatch.onField && !mapOpen && !store.snapshot.value.inBattle
+        }.getOrDefault(false)
+        fieldFrames = if (field) fieldFrames + 1 else 0
+        val show = fieldFrames >= FIELD_SETTLE_FRAMES
+        if (onField.value != show) onField.value = show
     }
 
     /** SETTINGS > RESTART GAME: the core goes, the save that's been written stays, and the ROM boots again from it. */
@@ -189,5 +226,7 @@ class Emulator(val rom: File, val save: File?) {
         const val WIDE_W = 284
         const val FRAME_NANOS = 16_742_706L // 280896 cycles at 16.78 MHz: 59.7275 frames a second
         const val SAMPLE_EVERY = 30L
+        /** Frames of plain field before the HUD comes on (~1/3 s), as on Android. */
+        const val FIELD_SETTLE_FRAMES = 20
     }
 }

@@ -4,6 +4,23 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.window.ApplicationScope
 import androidx.compose.runtime.key
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import com.pokedaisy.app.companion.ui.CompanionBack
+import com.pokedaisy.app.companion.ui.CompanionKeys
+import com.pokedaisy.app.companion.ui.MenuKey
+import com.pokedaisy.app.companion.ui.SidePanelHost
+import com.pokedaisy.app.companion.ui.SidePanelHandle
+import com.pokedaisy.app.companion.ui.SidePanelOpenTab
+import com.pokedaisy.app.companion.ui.SidePanelCloseTab
+import com.pokedaisy.app.companion.ui.sidePanelDensity
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import com.pokedaisy.app.companion.ui.FieldHud
+import com.pokedaisy.app.companion.data.hasData
+import com.pokedaisy.app.companion.ui.LocalCompanionBack
 import com.pokedaisy.app.companion.GameAspect
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.FrameWindowScope
@@ -82,6 +99,12 @@ fun runDesktop(rom: File?) {
     if (System.getProperty("prefsFile") == null) System.setProperty("prefsFile", File(userdata, "settings.txt").path)
     runCatching { javax.swing.UIManager.setLookAndFeel(javax.swing.UIManager.getSystemLookAndFeelClassName()) }
     createSharedUiState()
+    // First run: the companion gets a window of its own when there are two monitors, else it sits beside the game.
+    val firstRun = DesktopConfig(File(userdata, "desktop.properties"))
+    if (firstRun.get("screensChosen") == null) {
+        com.pokedaisy.app.Prefs(android.content.Context()).singleScreen = Monitors.count < 2
+        firstRun.set("screensChosen", "true")
+    }
     DesktopHost.open(com.pokedaisy.app.LibraryActivity::class.java)
     rom?.let(DesktopHost::startGame)
     application {
@@ -150,9 +173,27 @@ class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
     val config = DesktopConfig(File(userdata, "desktop.properties"))
     val emu = Emulator(rom, save)
     var crash by mutableStateOf<Throwable?>(null)
-    var place by mutableStateOf(runCatching { CompanionPlace.valueOf(config.get("companion") ?: "") }.getOrDefault(CompanionPlace.DOCKED))
+    private val prefs = com.pokedaisy.app.Prefs(android.content.Context())
+
+    /** SETTINGS > SINGLE SCREEN (the app's own setting, on the Library's Settings too): off = the companion in a window
+     * of its own, for a second monitor; on = beside the game. F2 flips it too. */
+    var place by mutableStateOf(
+        // Where it was last time (the side panel locked beside the game the first time); a pop-up comes back closed.
+        runCatching { CompanionPlace.valueOf(config.get("companionPlace") ?: "") }.getOrDefault(CompanionPlace.DOCKED)
+            .let { if (it == CompanionPlace.POPUP) CompanionPlace.HIDDEN else it }
+    )
         private set
-    val settings = DesktopSettings(emu, config, onClose = { onEnd() }, onHideCompanion = { moveCompanion(CompanionPlace.HIDDEN) })
+
+    /** SETTINGS > SWAP SCREENS: the game on the second monitor and the companion on the main one. */
+    var swapScreens by mutableStateOf(prefs.swapScreens)
+        private set
+
+    val settings = DesktopSettings(
+        emu, config, onClose = { onEnd() }, onHideCompanion = { moveCompanion(CompanionPlace.HIDDEN) },
+        companionOwnWindow = { place == CompanionPlace.WINDOW },
+        setCompanionOwnWindow = { moveCompanion(if (it) CompanionPlace.WINDOW else CompanionPlace.DOCKED) },
+        swap = { swapScreens }, setSwap = { swapScreens = it; prefs.swapScreens = it },
+    )
     val slots = DesktopSlots(emu, File(userdata, "states"))
 
     init {
@@ -161,7 +202,90 @@ class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
         emu.start(sound = true) { crash = it; it.printStackTrace() }
     }
 
-    fun moveCompanion(to: CompanionPlace) { place = to; config.set("companion", to.name) }
+    /** The phone's BACK and the game's buttons for the companion while it pops up over the game (as on a one-screen
+     * device: SidePanel's window), and where it was before. */
+    val back = CompanionBack()
+    val keys = CompanionKeys()
+    /** The HUD's own BACK (Esc closes its open panel first). */
+    val hudBack = CompanionBack()
+    /** Where the game's picture is drawn in its area (px): the HUD keeps to it. */
+    var gameRect by mutableStateOf<androidx.compose.ui.geometry.Rect?>(null)
+    private var beforePopup = CompanionPlace.DOCKED
+    /** Set from inside the game window: its focus (the D-pad moves it in the pop-up) and the window, for A's Enter. */
+    var focusManager: FocusManager? = null
+    var awtWindow: java.awt.Window? = null
+    /** The pop-up's focus is inside the companion: the D-pad moves it, else it first goes to the starting row. */
+    var popupFocused = false
+    private var synthetic = false
+
+    fun moveCompanion(to: CompanionPlace) {
+        if (to == CompanionPlace.POPUP && place != CompanionPlace.POPUP) beforePopup = place
+        place = to
+        if (to == CompanionPlace.DOCKED || to == CompanionPlace.WINDOW) prefs.singleScreen = to == CompanionPlace.DOCKED
+        config.set("companionPlace", to.name)
+        if (to == CompanionPlace.POPUP) emu.keys = 0 // held keys let go, as the phone's window does
+    }
+
+    /** Esc: the pop-up opens over the game; open, it goes back a step (a sub-page, a summary...), then closes. */
+    fun togglePopup() {
+        when {
+            place == CompanionPlace.POPUP -> if (!back.back()) closePopup()
+            // Locked beside the game (the side panel): Esc is the companion's back, as BACK is on the phone.
+            place == CompanionPlace.DOCKED && sideView -> back.back()
+            !hudBack.back() -> moveCompanion(CompanionPlace.POPUP)
+        }
+    }
+    /** COMPANION VIEW is the side panel (not the window in the middle). */
+    val sideView get() = settings.companionWindow != true
+    fun closePopup() {
+        if (place != CompanionPlace.POPUP) return
+        moveCompanion(if (sideView) CompanionPlace.HIDDEN else beforePopup.takeIf { it != CompanionPlace.POPUP } ?: CompanionPlace.DOCKED)
+    }
+
+    /**
+     * The game's keys while the companion pops up, as on the phone: B = back (then close), START = close, L / R = tabs,
+     * the D-pad moves the focus and A presses what has it; none of them reach the game. False = not a game key.
+     */
+    fun popupKey(e: KeyEvent): Boolean {
+        if (synthetic) return false
+        val k = when (e.key) {
+            Key.DirectionUp -> MenuKey.UP; Key.DirectionDown -> MenuKey.DOWN
+            Key.DirectionLeft -> MenuKey.LEFT; Key.DirectionRight -> MenuKey.RIGHT
+            Key.X -> MenuKey.A; Key.Z -> MenuKey.B; Key.A -> MenuKey.L; Key.S -> MenuKey.R
+            Key.Enter -> MenuKey.START; Key.Backspace -> MenuKey.SELECT
+            else -> return false
+        }
+        if (e.type != KeyEventType.KeyDown) return true
+        when (k) {
+            MenuKey.B -> if (!back.back()) closePopup()
+            MenuKey.START -> closePopup()
+            else -> keys.key(k)
+        }
+        return true
+    }
+
+    /** What nothing in the companion took: the D-pad moves Compose's focus, A presses the focused thing (its Enter). */
+    fun focusKey(key: MenuKey, start: () -> Unit): Boolean {
+        val fm = focusManager ?: return false
+        if (!popupFocused && key != MenuKey.A) { start(); return true }
+        when (key) {
+            MenuKey.UP -> fm.moveFocus(FocusDirection.Up)
+            MenuKey.DOWN -> fm.moveFocus(FocusDirection.Down)
+            MenuKey.LEFT -> fm.moveFocus(FocusDirection.Left)
+            MenuKey.RIGHT -> fm.moveFocus(FocusDirection.Right)
+            MenuKey.A -> {
+                val w = awtWindow ?: return false
+                val target = w.focusOwner ?: w
+                synthetic = true
+                try {
+                    for (id in listOf(java.awt.event.KeyEvent.KEY_PRESSED, java.awt.event.KeyEvent.KEY_RELEASED))
+                        target.dispatchEvent(java.awt.event.KeyEvent(target, id, System.currentTimeMillis(), 0, java.awt.event.KeyEvent.VK_ENTER, '\n'))
+                } finally { synthetic = false }
+            }
+            else -> return false
+        }
+        return true
+    }
     fun stop() = emu.stop()
 }
 
@@ -171,37 +295,119 @@ class GameSession(val rom: File, val save: File, val onEnd: () -> Unit) {
  */
 @Composable
 fun ApplicationScope.GameWindows(g: GameSession) {
-    val keys = { e: KeyEvent -> gameKey(g.emu, e, g.settings, g.slots, g.place, g::moveCompanion) }
     val snap by g.emu.store.snapshot.collectAsState()
-    Window(
+    val gameState = rememberWindowState(size = DpSize(1600.dp, 760.dp), position = WindowPosition(30.dp, 30.dp))
+    val companionState = rememberWindowState(size = DpSize(700.dp, 640.dp), position = WindowPosition(1660.dp, 30.dp))
+    fun keysFor(state: androidx.compose.ui.window.WindowState) = { e: KeyEvent ->
+        if (e.key == Key.F11) {
+            if (e.type == KeyEventType.KeyDown) {
+                if (state === gameState) g.settings.setDisplayMode(if (g.settings.displayMode == DisplayMode.FULLSCREEN) DisplayMode.WINDOWED else DisplayMode.FULLSCREEN)
+                else Monitors.toggleFullscreen(state)
+            }
+            true
+        }
+        else if (e.key == Key.F10 && state === gameState) {
+            if (e.type == KeyEventType.KeyDown)
+                g.settings.setDisplayMode(if (g.settings.displayMode == DisplayMode.BORDERLESS) DisplayMode.WINDOWED else DisplayMode.BORDERLESS)
+            true
+        }
+        else if (e.key == Key.Escape) { if (e.type == KeyEventType.KeyDown) g.togglePopup(); true }
+        else if (g.place == CompanionPlace.POPUP && !g.sideView && g.popupKey(e)) true
+        else gameKey(g.emu, e, g.settings, g.slots, g.place, g::moveCompanion)
+    }
+    // BORDERLESS has no title bar, which a window only takes when it's made: a new one each time the mode changes.
+    val mode = g.settings.displayMode
+    key(mode == DisplayMode.BORDERLESS) { Window(
         onCloseRequest = g.onEnd,
         title = "PokeDaisy - ${g.rom.nameWithoutExtension}",
-        state = rememberWindowState(size = DpSize(1600.dp, 760.dp), position = WindowPosition(30.dp, 30.dp)),
-        onPreviewKeyEvent = keys,
+        state = gameState,
+        undecorated = mode == DisplayMode.BORDERLESS,
+        onPreviewKeyEvent = keysFor(gameState),
     ) {
-        GameMenus(g.settings, g.slots, g.place, g::moveCompanion, g.onEnd)
+        LaunchedEffect(mode) { Monitors.display(gameState, mode) }
+        // Where the windows go follows SINGLE SCREEN / SWAP SCREENS, whenever either changes (F2, the menus, SETTINGS).
+        // (Inside the window: the application's own composition has no frame clock to run effects on.)
+        LaunchedEffect(g.place == CompanionPlace.WINDOW, g.swapScreens) {
+            Monitors.place(gameState, companionState, g.place == CompanionPlace.WINDOW, g.swapScreens)
+        }
+        // No menu bar in BORDERLESS / FULL SCREEN: the game fills the monitor (F10 / F11 go back, Esc has SETTINGS).
+        if (mode == DisplayMode.WINDOWED) GameMenus(g.settings, g.slots, g.place, g::moveCompanion, g.onEnd, g::togglePopup)
+        g.focusManager = LocalFocusManager.current
+        g.awtWindow = window
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-            // Docked: the companion takes up to 40% of the width at its own shape, the game the rest.
-            val companionW = if (g.place == CompanionPlace.DOCKED) minOf(maxWidth * 0.4f, maxHeight * (COMPANION_DP_W / COMPANION_DP_H)) else 0.dp
+            // The companion's width at its shape (up to half the window; FILL: 40%), docked beside the game or sliding
+            // over it as the side panel.
+            val shape = g.settings.companionShape.aspect
+            val panelW = if (shape == null) maxWidth * 0.4f else minOf(maxWidth * 0.5f, maxHeight * shape)
+            val sideView = g.settings.companionWindow != true
+            // The side panel's tabs at the companion's own scale.
+            val panelPx = with(LocalDensity.current) { panelW.toPx() }
+            val tabDensity = Density(sidePanelDensity(panelPx.toInt(), constraints.maxHeight))
             Row(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f).fillMaxHeight()) { GameScreen(g.emu, g.crash) }
-                if (g.place == CompanionPlace.DOCKED) Box(Modifier.width(companionW).fillMaxHeight()) {
-                    CompanionPanel(snap, g.settings, g.slots)
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    GameScreen(g.emu, g.crash) { g.gameRect = it }
+                    GameHud(g, snap)
+                }
+                if (g.place == CompanionPlace.DOCKED) Box(Modifier.width(panelW).fillMaxHeight()) {
+                    CompanionPanel(snap, g.settings, g.slots, g.back, fill = true)
+                }
+            }
+            if (sideView) CompositionLocalProvider(LocalDensity provides tabDensity) {
+                // Locked beside the game: the padlock on its left edge unlocks it (it then slides over the game).
+                if (g.place == CompanionPlace.DOCKED) Box(Modifier.fillMaxSize().padding(end = with(tabDensity) { panelPx.toDp() }), contentAlignment = Alignment.TopEnd) {
+                    SidePanelHandle(docked = true) { g.moveCompanion(CompanionPlace.POPUP) }
+                }
+                // Closed: the tab on the right edge, bottom, slides it in (Esc too, or the HUD's COMPANION).
+                if (g.place == CompanionPlace.HIDDEN) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
+                    SidePanelOpenTab { g.moveCompanion(CompanionPlace.POPUP) }
+                }
+            }
+            // The side panel, as on a one-screen phone: it slides in over the game's right side (the game keeps running
+            // under it); the padlock locks it beside the game, the tab at its bottom left (or Esc) slides it away.
+            androidx.compose.animation.AnimatedVisibility(
+                visible = sideView && g.place == CompanionPlace.POPUP,
+                modifier = Modifier.align(Alignment.CenterEnd),
+                enter = androidx.compose.animation.slideInHorizontally { it },
+                exit = androidx.compose.animation.slideOutHorizontally { it },
+            ) {
+                Row(Modifier.fillMaxHeight()) {
+                    CompositionLocalProvider(LocalDensity provides tabDensity) {
+                        Column(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween) {
+                            SidePanelHandle(docked = false) { g.moveCompanion(CompanionPlace.DOCKED) }
+                            SidePanelCloseTab { g.closePopup() }
+                        }
+                    }
+                    Box(Modifier.width(panelW).fillMaxHeight()) {
+                        CompanionPanel(snap, g.settings, g.slots, g.back, fill = true)
+                    }
+                }
+            }
+            // The other COMPANION VIEW: the phone's window, framed in the middle over the dimmed game.
+            if (!sideView && g.place == CompanionPlace.POPUP) {
+                SidePanelHost(
+                    window = true, onClose = g::closePopup, keys = g.keys, windowAspect = shape,
+                    focusKeys = { key, _, start -> g.focusKey(key, start) },
+                ) {
+                    Box(Modifier.fillMaxSize().onFocusChanged { g.popupFocused = it.hasFocus }) {
+                        CompanionScreen(snap, slots = g.slots, settings = g.settings, back = g.back, keys = g.keys)
+                    }
                 }
             }
         }
-    }
+    } }
     if (g.place == CompanionPlace.WINDOW) Window(
         // Closing it puts the companion back beside the game, rather than ending the game.
         onCloseRequest = { g.moveCompanion(CompanionPlace.DOCKED) },
         title = "PokeDaisy - companion (close to put it back beside the game)",
-        state = rememberWindowState(size = DpSize(700.dp, 640.dp), position = WindowPosition(1660.dp, 30.dp)),
-        onPreviewKeyEvent = keys,
+        state = companionState,
+        onPreviewKeyEvent = keysFor(companionState),
     ) {
         MenuBar {
             Menu("Companion") {
                 Item("Put back beside the game (F2)", onClick = { g.moveCompanion(CompanionPlace.DOCKED) })
                 Item("Hide (F3)", onClick = { g.moveCompanion(CompanionPlace.HIDDEN) })
+                CheckboxItem("Swap screens", checked = g.swapScreens, onCheckedChange = { g.settings.setSwapScreens(it) })
+                Item("Full screen on / off (F11)", onClick = { Monitors.toggleFullscreen(companionState) })
             }
         }
         CompanionPanel(snap, g.settings, g.slots)
@@ -212,7 +418,7 @@ fun ApplicationScope.GameWindows(g: GameSession) {
 @Composable
 fun FrameWindowScope.GameMenus(
     settings: DesktopSettings, slots: DesktopSlots, place: CompanionPlace,
-    moveCompanion: (CompanionPlace) -> Unit, exit: () -> Unit,
+    moveCompanion: (CompanionPlace) -> Unit, exit: () -> Unit, togglePopup: () -> Unit,
 ) = MenuBar {
     Menu("Game") {
         Item("Save state to slot ${slots.currentIndex} (F5)", onClick = { slots.requestSave(slots.currentIndex) })
@@ -228,11 +434,26 @@ fun FrameWindowScope.GameMenus(
     Menu("View") {
         RadioButtonItem("Companion beside the game (F2)", selected = place == CompanionPlace.DOCKED, onClick = { moveCompanion(CompanionPlace.DOCKED) })
         RadioButtonItem("Companion in its own window (F2)", selected = place == CompanionPlace.WINDOW, onClick = { moveCompanion(CompanionPlace.WINDOW) })
+        RadioButtonItem("Companion over the game (Esc)", selected = place == CompanionPlace.POPUP, onClick = togglePopup)
         RadioButtonItem("Companion hidden (F3)", selected = place == CompanionPlace.HIDDEN, onClick = { moveCompanion(CompanionPlace.HIDDEN) })
+        CheckboxItem("Swap screens (game on the second monitor)", checked = settings.swapScreens, enabled = place == CompanionPlace.WINDOW,
+            onCheckedChange = { settings.setSwapScreens(it) })
+        Separator()
+        Menu("Companion shape") {
+            CompanionShape.entries.forEach { c ->
+                RadioButtonItem(c.label, selected = settings.companionShape == c, onClick = { settings.setCompanionShape(c) })
+            }
+        }
+        CheckboxItem("HUD over the game", checked = settings.fieldHud, onCheckedChange = { settings.setFieldHud(it) })
         Separator()
         GameAspect.entries.forEach { a ->
             RadioButtonItem("Screen: ${a.label}" + if (a == GameAspect.WIDE) " (E)" else "", selected = settings.gameAspect == a,
                 enabled = a != GameAspect.WIDE || settings.wideSupported, onClick = { settings.setGameAspect(a) })
+        }
+        Separator()
+        DisplayMode.entries.forEach { d ->
+            val key = when (d) { DisplayMode.BORDERLESS -> " (F10)"; DisplayMode.FULLSCREEN -> " (F11)"; else -> "" }
+            RadioButtonItem("Window: ${d.label}$key", selected = settings.displayMode == d, onClick = { settings.setDisplayMode(d) })
         }
     }
 }
@@ -330,7 +551,7 @@ private val HOTKEYS = setOf(Key.E, Key.Tab, Key.F5, Key.F7, Key.F6, Key.F8, Key.
 
 /** The game, as large as the window allows at its own shape, square pixels, black around it. */
 @Composable
-fun GameScreen(emu: Emulator, crash: Throwable?) {
+fun GameScreen(emu: Emulator, crash: Throwable?, onRect: (androidx.compose.ui.geometry.Rect) -> Unit = {}) {
     var image by remember { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(emu) {
         var last: java.awt.image.BufferedImage? = null
@@ -342,33 +563,68 @@ fun GameScreen(emu: Emulator, crash: Throwable?) {
             }
         }
     }
-    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val img = image
+        val bw = constraints.maxWidth.toFloat()
+        val bh = constraints.maxHeight.toFloat()
         if (crash != null) Text("The game stopped: ${crash.message}", color = Color.White)
-        else if (img != null) Canvas(Modifier.fillMaxSize()) {
-            val scale = min(size.width / img.width, size.height / img.height)
-            // STRETCH: the GBA's picture made as wide as the window, at the window's height.
-            val w = if (emu.stretch) size.width.toInt() else (img.width * scale).toInt()
+        else if (img != null) {
+            val scale = min(bw / img.width, bh / img.height)
+            // STRETCH: the GBA's picture made as wide as the area, at the area's height.
+            val w = if (emu.stretch) bw.toInt() else (img.width * scale).toInt()
             val h = (img.height * scale).toInt()
-            drawImage(
-                img,
-                dstOffset = IntOffset(((size.width - w) / 2).toInt(), ((size.height - h) / 2).toInt()),
-                dstSize = IntSize(w, h),
-                filterQuality = FilterQuality.None,
-            )
+            val x = ((bw - w) / 2).toInt()
+            val y = ((bh - h) / 2).toInt()
+            val rect = androidx.compose.ui.geometry.Rect(x.toFloat(), y.toFloat(), (x + w).toFloat(), (y + h).toFloat())
+            LaunchedEffect(rect) { onRect(rect) }
+            Canvas(Modifier.fillMaxSize()) {
+                drawImage(img, dstOffset = IntOffset(x, y), dstSize = IntSize(w, h), filterQuality = FilterQuality.None)
+            }
         }
+    }
+}
+
+/**
+ * The app's FIELD HUD over the game (SETTINGS > HUD): party, minimap, balls, BAG / WILD, and COMPANION, which pops the
+ * companion up over the game (Esc). Sized to the picture as on the phone: about half a GBA pixel per HUD pixel.
+ */
+@Composable
+fun GameHud(g: GameSession, snap: SnapshotView) {
+    val onField by g.emu.onField.collectAsState()
+    val rect = g.gameRect ?: return
+    val shown = g.settings.fieldHud && onField && snap.hasData && !snap.unsupported && !snap.inBattle &&
+        g.place != CompanionPlace.POPUP
+    // The phone's 1080p screen: a game pixel of 6.75 px, the HUD's base density 2.75 (its GBA pixel 3 px).
+    val gamePx = rect.height / Emulator.GBA_H
+    val outer = LocalDensity.current
+    CompositionLocalProvider(
+        LocalDensity provides Density((gamePx * 2.75f / 6.75f).coerceAtLeast(1f), outer.fontScale),
+        LocalCompanionBack provides g.hudBack,
+    ) {
+        FieldHud(
+            snap, shown, g.settings.fieldHudStyle, frame = rect,
+            // COMPANION while it isn't already beside the game, as the phone shows it while its panel is closed.
+            onOpenCompanion = if (g.place == CompanionPlace.DOCKED) null else ({ g.togglePopup() }),
+        )
     }
 }
 
 /** The app's own companion, sized like the AYN Thor's bottom screen (1240 x 1080 at density 2.625) to fill its area,
  * with the desktop's SETTINGS and STATES bridges. */
 @Composable
-fun CompanionPanel(snap: SnapshotView, settings: DesktopSettings, slots: DesktopSlots) {
+fun CompanionPanel(
+    snap: SnapshotView, settings: DesktopSettings, slots: DesktopSlots, back: CompanionBack? = null,
+    /** Beside the game (docked, the side panel): the companion fills its panel, whose width the shape already set. */
+    fill: Boolean = false,
+) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val px = with(LocalDensity.current) { Pair(maxWidth.toPx(), maxHeight.toPx()) }
-        val density = min(px.first / COMPANION_DP_W, px.second / COMPANION_DP_H)
+        // COMPANION SHAPE: the Thor's bottom screen's height in dp, as wide as the shape makes it (FILL: the area's).
+        val aspect = (if (fill) null else settings.companionShape.aspect) ?: (px.first / px.second)
+        val dpW = COMPANION_DP_H * aspect
+        val density = min(px.first / dpW, px.second / COMPANION_DP_H)
         CompositionLocalProvider(LocalDensity provides Density(density)) {
-            Box(Modifier.size(COMPANION_DP_W.dp, COMPANION_DP_H.dp)) { CompanionScreen(snap, slots = slots, settings = settings) }
+            Box(Modifier.size(dpW.dp, COMPANION_DP_H.dp)) { CompanionScreen(snap, slots = slots, settings = settings, back = back) }
         }
     }
 }
