@@ -453,6 +453,13 @@ private fun homeRows(
                 labelBadge = NewFeatures.badge(NewFeatures.COMPANION_WINDOW), subtitle = "A window over the game, or a side panel",
             ) { s.setCompanionWindow(!window); changed() }
         },
+        // One screen: the tab at the screen's right edge that opens the companion, or none (BACK and the HUD still do).
+        s.sidePanelTab?.let { on ->
+            SettingRow(
+                tk("EDGE ARROW"), onOff(on), subtitle = "The tab at the screen's edge that opens the companion",
+                labelBadge = NewFeatures.badge(NewFeatures.EDGE_ARROW),
+            ) { s.setSidePanelTab(!on); changed() }
+        },
         // Two screens: the game and the companion trade screens (this companion moves with them).
         SettingRow(tk("SWAP SCREENS"), onOff(s.swapScreens), subtitle = "Game and companion trade screens") { s.setSwapScreens(!s.swapScreens); changed() }
             .takeIf { s.usesSecondScreen },

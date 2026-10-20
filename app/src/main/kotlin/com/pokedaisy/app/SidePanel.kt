@@ -79,6 +79,8 @@ class SidePanel(
 
     /** A window in the middle rather than the side panel (Compose state: the panel's content draws it). */
     private val window = mutableStateOf(prefs.companionWindow)
+    /** SETTINGS > EDGE ARROW: the open tab shows ([Prefs.sidePanelTab]). */
+    private var openTabOn = prefs.sidePanelTab
     private var fraction = prefs.sidePanelWidth.coerceIn(MIN_FRACTION, MAX_FRACTION)
 
     /** On and closed: a tap could open it (the FIELD HUD's button for it shows then). Compose state. */
@@ -204,6 +206,13 @@ class SidePanel(
     /** Closes the window (a battle pick, FLY: the game's to see); the side panel stays. */
     fun closeWindow() {
         if (windowOpen) hide()
+    }
+
+    /** SETTINGS > EDGE ARROW: the open tab on or off, at once. */
+    fun setOpenTab(on: Boolean) {
+        if (openTabOn == on) return
+        openTabOn = on
+        apply()
     }
 
     /** SETTINGS > COMPANION VIEW: the window or the side panel, at once (the companion asking stays open). */
@@ -356,7 +365,7 @@ class SidePanel(
         }
         closed.value = enabled && !open
         openTab?.apply {
-            visibility = if (enabled && !open && !tabInHud) View.VISIBLE else View.GONE
+            visibility = if (enabled && !open && !tabInHud && openTabOn) View.VISIBLE else View.GONE
             alpha = if (docked.value && !win) LOCKED_TAB_ALPHA else 1f
         }
         setRightMargin(game, if (side && docked.value) w else 0)
