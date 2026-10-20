@@ -268,7 +268,7 @@ fun prepareArt(rom: File) {
     val dir = RomArt.dir(files)
     val crc = com.pokedaisy.app.SaveStates.crc32(rom)
     // Once per ROM, as on Android: a hack's own art (its map, its party slots) joins what other ROMs gave.
-    val scanned = File(dir, "scanned-$crc-v${RomArt.SCAN_VERSION}")
+    val scanned = File(dir, "scanned-$crc")
     if (!scanned.isFile) {
         val wrote = RomArt.extractTo(rom.readBytes(), dir)
         println("companion art: ${wrote.size} files from ${rom.name}")
