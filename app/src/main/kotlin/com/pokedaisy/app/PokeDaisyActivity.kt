@@ -918,6 +918,12 @@ class PokeDaisyActivity : Activity() {
             Prefs(this@PokeDaisyActivity).companionWindow = on
             runOnUiThread { sidePanel.setWindow(on) }
         }
+        override val sidePanelTab get() =
+            if (::sidePanel.isInitialized && sidePanel.enabled) Prefs(this@PokeDaisyActivity).sidePanelTab else null
+        override fun setSidePanelTab(on: Boolean) {
+            Prefs(this@PokeDaisyActivity).sidePanelTab = on
+            runOnUiThread { sidePanel.setOpenTab(on) }
+        }
         override fun setSwapScreens(on: Boolean) {
             Prefs(this@PokeDaisyActivity).swapScreens = on
             // The companion that asked moves screens: it comes back on SETTINGS, on SWAP SCREENS.

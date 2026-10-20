@@ -260,6 +260,11 @@ interface CompanionSettings {
     val companionWindow: Boolean? get() = null
     fun setCompanionWindow(on: Boolean) {}
 
+    /** One screen held sideways: the tab at the screen's right edge that opens the companion - see
+     * [com.pokedaisy.app.Prefs.sidePanelTab]. Null where there's no such tab (a second screen): no row. */
+    val sidePanelTab: Boolean? get() = null
+    fun setSidePanelTab(on: Boolean) {}
+
     /** The game on the second screen and the companion on the main one - see [Prefs.swapScreens]. */
     val swapScreens: Boolean get() = false
     fun setSwapScreens(on: Boolean) {}

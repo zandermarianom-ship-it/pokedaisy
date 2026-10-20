@@ -52,7 +52,7 @@ On a tall screen, about 2.5 inches high or more like the Retroid Pocket 6, the c
 
 ### The window
 
-- **Open it:** tap `BACK`, or tap the small tab at the bottom of the screen's right edge.
+- **Open it:** tap `BACK`, or tap the small tab at the bottom of the screen's right edge. Don't want that tab over your game? Turn `EDGE ARROW` off (next to `COMPANION VIEW`): `BACK`, the HUD's `COMPANION` button and the `QUICK MENU` still open the companion.
 - **Use your buttons:** while the window is open, your controls work the companion instead of the game. The D-pad moves the cursor and `A` picks what it's on, the way the game's own menus work. `L` and `R` move between the tabs, and `B` goes back. When there's nothing left to go back from, `B` closes the window. `START` closes it from anywhere. Your buttons follow your `GAME BUTTONS` settings, so if you moved `A` and `B`, the window follows.
 - **Close it:** press `B` or `BACK` until it closes, press `START`, tap the X at its top right, or tap anywhere outside it.
 

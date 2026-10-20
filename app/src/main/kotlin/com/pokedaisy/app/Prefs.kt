@@ -371,6 +371,12 @@ class Prefs(context: Context) {
         get() = p.getBoolean("companion_window", true)
         set(v) = p.edit().putBoolean("companion_window", v).apply()
 
+    /** One screen: the small tab at the bottom of the screen's right edge that opens the companion (SETTINGS > EDGE
+     * ARROW). Off, BACK, the HUD's COMPANION and the QUICK MENU still open it. */
+    var sidePanelTab: Boolean
+        get() = p.getBoolean("side_panel_tab", true)
+        set(v) = p.edit().putBoolean("side_panel_tab", v).apply()
+
     /** A phone held upright: the companion right under the game, the touch pad at the screen's bottom, instead of
      * the companion along the bottom (SETTINGS > COMPANION; see [PortraitPanel]). */
     var portraitCompanionUnderGame: Boolean
