@@ -101,11 +101,12 @@ fun createSharedUiState() {
     }
 }
 
-/** The save beside the ROM: RetroArch's .srm if there is one, else mGBA's .sav (created on the first save). */
+/** The save beside the ROM: RetroArch's .srm if there is one, else mGBA's .sav; a new save is a .srm, so it syncs
+ * with RetroArch / Batocera (the same bytes: a Pokemon cart's 128 KB, which both read). */
 fun defaultSave(rom: File): File {
     val base = rom.nameWithoutExtension
     return listOf("srm", "sav").map { File(rom.parentFile, "$base.$it") }.firstOrNull { it.isFile }
-        ?: File(rom.parentFile, "$base.sav")
+        ?: File(rom.parentFile, "$base.srm")
 }
 
 /** The companion's game art (party slots, bag, map...) is rebuilt from the player's own ROM, as on Android. */

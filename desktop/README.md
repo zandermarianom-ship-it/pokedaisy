@@ -25,7 +25,7 @@ gradle run -Prom=/path/firered.gba [-Psav=/path/firered.srm]
 gradle selftest -Prom=/path/firered.gba [-Psav=...] [-Psteps=my.script]   # PNGs in build/check
 ```
 
-Without `-Psav`, the save beside the ROM is used (`.srm`, else `.sav`).
+Without `-Psav`, the save beside the ROM is used (`.srm`, else `.sav`); a new save is created as `.srm`, like RetroArch's.
 
 **Keys**: arrows, X = A, Z = B, Enter = START, Backspace = SELECT, A = L, S = R, E = EXPAND on / off.
 
