@@ -42,6 +42,15 @@ fun main(args: Array<String>) {
                 emu.keys = 0
                 if (parts[0] == "press") repeat(12) { emu.step() }
             }
+            // `besteffort`: how each known game of the ROM's family reads it (BEST EFFORT's own check), best first.
+            "besteffort" -> {
+                val code = MgbaCore.pkRomCode().orEmpty()
+                val r = com.pokedaisy.app.companion.data.InProcessReader
+                val text = com.pokedaisy.app.companion.data.BestEffort.romText(r, code, rom.length())
+                val v = com.pokedaisy.app.companion.data.BestEffort.evaluate(r, code, rom.length(), text)
+                println("best effort ($code): sawParty=${v.sawParty} sure=${v.sure?.candidate?.id} guess=${v.guess?.candidate?.id}")
+                v.fits.forEach { println("  $it") }
+            }
             "shot" -> {
                 val f = emu.frame.get()
                 if (f == null) { println("${parts[1]}: no frame yet"); failed++; continue }
@@ -55,6 +64,8 @@ fun main(args: Array<String>) {
                 runCatching { renderCompanion(snap, tab, File(out, "companion-${parts[1]}.png")) }
                     .onFailure { failed++; println("companion-${parts[1]}: FAILED $it"); it.printStackTrace() }
             }
+            // WHICH GAME IS THIS?: read the ROM as candidate ID (BestEffort's ids), as the picker does.
+            "pick" -> { emu.store.gamePick.pick(parts[1]); println("picked ${parts[1]}") }
             else -> error("unknown script line: $raw")
         }
     }
@@ -73,6 +84,8 @@ fun keyBit(name: String) = when (name.uppercase()) {
 /** What the companion read from the game's memory, in words. */
 fun describe(s: SnapshotView) {
     println("companion: game=${s.game} connected=${s.connected} error=${s.error} unsupported=${s.unsupported}")
+    s.bestEffort?.let { println("  best effort: ${it.title} full=${it.full} off=${it.off} guess=${it.guess} doubt=${it.doubt} suggest=${it.suggest}") }
+    s.gamePicker?.let { p -> println("  picker: current=${p.current} miss=${p.miss} declined=${p.declined} options=" + p.options.joinToString { o -> "${o.title}${if (o.likely) "*" else ""}${if (o.readsParty) "(party)" else ""}" }) }
     println("  location=${s.location} (section ${s.regionMapSectionId}) at ${s.x},${s.y} inBattle=${s.inBattle} items=${s.items.size}")
     // Independent of the companion's decoding: FireRed's (and CFRU hacks') gPlayerPartyCount, straight from RAM.
     val raw = MgbaCore.pkReadBytes(0x02024029L, 1)?.firstOrNull()?.toInt()

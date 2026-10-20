@@ -553,8 +553,19 @@ object BestEffortStore {
         }.toMap()
     }.getOrDefault(emptyMap())
 
+    /**
+     * Hacks checked by hand against a real save, read as the game they're built on without the player picking it (best
+     * effort alone isn't sure of them: they renamed or added species / moves). Under the player's own answers - a
+     * NONE OF THESE or another pick in the file wins. By SHA-1 of the whole ROM.
+     */
+    private val KNOWN: Map<String, Entry> = listOf(
+        // Ghost Grey 1.0.4 (FireRed rev 0 + DPE, 32 MB): party, bag, guide and map section all read as FireRed rev 0's;
+        // its own region map art is redrawn (no map picture yet). Checked on a save in Viridian City.
+        Entry("0dafc0116b74406a2df491e26ccb40dd362fb0b7", "FIRERED_REV0", true, emptySet(), Source.PICKED, verified = true),
+    ).associateBy { it.sha1 }
+
     /** Every ROM's kept match (not the ones the player said NONE OF THESE to). */
-    fun all(): Map<String, Entry> = rows().filterValues { it.source != Source.NONE }
+    fun all(): Map<String, Entry> = (KNOWN + rows()).filterValues { it.source != Source.NONE }
 
     fun load(sha1: String?): Entry? = sha1?.let { all()[it.lowercase()] }
 

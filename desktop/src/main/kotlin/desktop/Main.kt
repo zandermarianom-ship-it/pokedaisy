@@ -523,7 +523,7 @@ fun ApplicationScope.GameWindows(g: GameSession) {
                     focusKeys = { key, _, start -> g.focusKey(key, start) },
                 ) {
                     Box(Modifier.fillMaxSize().onFocusChanged { g.popupFocused = it.hasFocus }) {
-                        CompanionScreen(snap, slots = g.slots, settings = g.settings, back = g.back, keys = g.keys)
+                        CompanionScreen(snap, slots = g.slots, settings = g.settings, back = g.back, keys = g.keys, gamePick = g.emu.store.gamePick)
                     }
                 }
             }
@@ -766,6 +766,8 @@ fun CompanionPanel(
     keys: CompanionKeys? = null,
     /** Beside the game (docked, the side panel): the companion fills its panel, whose width the shape already set. */
     fill: Boolean = false,
+    /** WHICH GAME IS THIS? for a hack it doesn't know (BEST EFFORT): PICK A GAME, PLAYS AS. */
+    gamePick: com.pokedaisy.app.companion.GamePickActions? = DesktopHost.game?.emu?.store?.gamePick,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val px = with(LocalDensity.current) { Pair(maxWidth.toPx(), maxHeight.toPx()) }
@@ -774,7 +776,7 @@ fun CompanionPanel(
         val dpW = COMPANION_DP_H * aspect
         val density = min(px.first / dpW, px.second / COMPANION_DP_H)
         CompositionLocalProvider(LocalDensity provides Density(density)) {
-            Box(Modifier.size(dpW.dp, COMPANION_DP_H.dp)) { CompanionScreen(snap, slots = slots, settings = settings, back = back, keys = keys) }
+            Box(Modifier.size(dpW.dp, COMPANION_DP_H.dp)) { CompanionScreen(snap, slots = slots, settings = settings, back = back, keys = keys, gamePick = gamePick) }
         }
     }
 }
