@@ -1,6 +1,13 @@
 package desktop
 
 import androidx.compose.foundation.Canvas
+import com.pokedaisy.app.companion.GameAspect
+import androidx.compose.ui.window.MenuBar
+import androidx.compose.ui.window.FrameWindowScope
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -90,35 +97,94 @@ fun showError(message: String) {
         javax.swing.JOptionPane.showMessageDialog(null, message, "PokeDaisy", javax.swing.JOptionPane.ERROR_MESSAGE)
 }
 
-/** The game and the companion windows for [rom], until either is closed. */
+/**
+ * The game for [rom]: one window with the companion beside the game by default; View > Companion (or F2) pops the
+ * companion out into a window of its own for a second monitor and back, F3 hides / shows it.
+ */
 fun play(rom: File, save: File) {
     println("ROM ${rom.path}, save ${save.path}")
+    val files = android.content.Context().filesDir
+    val userdata = files.parentFile
+    backUpSave(save, File(userdata, "save-backups"))
     prepareArt(rom)
     createSharedUiState()
 
+    val config = DesktopConfig(File(userdata, "desktop.properties"))
     val emu = Emulator(rom, save)
     var crash by mutableStateOf<Throwable?>(null)
     emu.start(sound = true) { crash = it; it.printStackTrace() }
 
+    var place by mutableStateOf(runCatching { CompanionPlace.valueOf(config.get("companion") ?: "") }.getOrDefault(CompanionPlace.DOCKED))
+    fun moveCompanion(to: CompanionPlace) { place = to; config.set("companion", to.name) }
+
     application {
         val exit = { emu.stop(); exitApplication() }
+        val settings = remember { DesktopSettings(emu, config, onClose = exit, onHideCompanion = { moveCompanion(CompanionPlace.HIDDEN) }) }
+        val slots = remember { DesktopSlots(emu, File(userdata, "states")) }
+        val keys = { e: KeyEvent -> gameKey(emu, e, settings, slots, place, ::moveCompanion) }
+        val snap by emu.store.snapshot.collectAsState()
+
         Window(
             onCloseRequest = exit,
             title = "PokeDaisy - ${rom.nameWithoutExtension}",
-            state = rememberWindowState(size = DpSize(1280.dp, 760.dp), position = WindowPosition(40.dp, 40.dp)),
-            onPreviewKeyEvent = { gameKey(emu, it) },
+            state = rememberWindowState(size = DpSize(1600.dp, 760.dp), position = WindowPosition(30.dp, 30.dp)),
+            onPreviewKeyEvent = keys,
         ) {
-            GameScreen(emu, crash)
+            GameMenus(settings, slots, place, ::moveCompanion, exit)
+            BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+                // Docked: the companion takes up to 40% of the width at its own shape, the game the rest.
+                val companionW = if (place == CompanionPlace.DOCKED) minOf(maxWidth * 0.4f, maxHeight * (COMPANION_DP_W / COMPANION_DP_H)) else 0.dp
+                Row(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f).fillMaxHeight()) { GameScreen(emu, crash) }
+                    if (place == CompanionPlace.DOCKED) Box(Modifier.width(companionW).fillMaxHeight()) {
+                        CompanionPanel(snap, settings, slots)
+                    }
+                }
+            }
         }
-        Window(
-            onCloseRequest = exit,
-            title = "PokeDaisy - companion",
-            state = rememberWindowState(size = DpSize(700.dp, 640.dp), position = WindowPosition(1340.dp, 40.dp)),
-            // The companion window passes the game's keys on too, so either window can have focus.
-            onPreviewKeyEvent = { gameKey(emu, it) },
+        if (place == CompanionPlace.WINDOW) Window(
+            // Closing it puts the companion back beside the game, rather than ending the game.
+            onCloseRequest = { moveCompanion(CompanionPlace.DOCKED) },
+            title = "PokeDaisy - companion (close to put it back beside the game)",
+            state = rememberWindowState(size = DpSize(700.dp, 640.dp), position = WindowPosition(1660.dp, 30.dp)),
+            onPreviewKeyEvent = keys,
         ) {
-            val snap by emu.store.snapshot.collectAsState()
-            CompanionWindow(snap)
+            MenuBar {
+                Menu("Companion") {
+                    Item("Put back beside the game (F2)", onClick = { moveCompanion(CompanionPlace.DOCKED) })
+                    Item("Hide (F3)", onClick = { moveCompanion(CompanionPlace.HIDDEN) })
+                }
+            }
+            CompanionPanel(snap, settings, slots)
+        }
+    }
+}
+
+/** The game window's menus: the things the companion's SETTINGS can't reach on a desktop (or that want a key). */
+@Composable
+fun FrameWindowScope.GameMenus(
+    settings: DesktopSettings, slots: DesktopSlots, place: CompanionPlace,
+    moveCompanion: (CompanionPlace) -> Unit, exit: () -> Unit,
+) = MenuBar {
+    Menu("Game") {
+        Item("Save state to slot ${slots.currentIndex} (F5)", onClick = { slots.requestSave(slots.currentIndex) })
+        Item("Load state from slot ${slots.currentIndex} (F7)", onClick = { slots.requestLoad(slots.currentIndex) })
+        Item("Next slot (F8)", onClick = { slots.select(slots.currentIndex + 1) })
+        Item("Previous slot (F6)", onClick = { slots.select(slots.currentIndex - 1) })
+        Separator()
+        CheckboxItem("Fast-forward (Tab, or hold Space)", checked = settings.ffToggled, onCheckedChange = { settings.setFfToggled(it) })
+        Separator()
+        Item("Restart game", onClick = { settings.restartGame() })
+        Item("Quit", onClick = exit)
+    }
+    Menu("View") {
+        RadioButtonItem("Companion beside the game (F2)", selected = place == CompanionPlace.DOCKED, onClick = { moveCompanion(CompanionPlace.DOCKED) })
+        RadioButtonItem("Companion in its own window (F2)", selected = place == CompanionPlace.WINDOW, onClick = { moveCompanion(CompanionPlace.WINDOW) })
+        RadioButtonItem("Companion hidden (F3)", selected = place == CompanionPlace.HIDDEN, onClick = { moveCompanion(CompanionPlace.HIDDEN) })
+        Separator()
+        GameAspect.entries.forEach { a ->
+            RadioButtonItem("Screen: ${a.label}" + if (a == GameAspect.WIDE) " (E)" else "", selected = settings.gameAspect == a,
+                enabled = a != GameAspect.WIDE || settings.wideSupported, onClick = { settings.setGameAspect(a) })
         }
     }
 }
@@ -165,8 +231,16 @@ fun prepareArt(rom: File) {
     RomRegionMap.current = RomRegionMap.loadNow(files, com.pokedaisy.app.SaveStates.crc32(rom), rom)
 }
 
-/** Keyboard -> GBA keys: arrows, X = A, Z = B, Enter = START, Backspace = SELECT, A = L, S = R; E toggles EXPAND. */
-fun gameKey(emu: Emulator, e: KeyEvent): Boolean {
+/**
+ * Keyboard -> GBA keys: arrows, X = A, Z = B, Enter = START, Backspace = SELECT, A = L, S = R. Hotkeys: E = EXPAND,
+ * Space (held) / Tab = fast-forward, F5 / F7 = save / load state, F6 / F8 = slot, F2 = companion beside the game or in
+ * its own window, F3 = companion hidden / shown.
+ */
+fun gameKey(
+    emu: Emulator, e: KeyEvent, settings: DesktopSettings, slots: DesktopSlots,
+    place: CompanionPlace, moveCompanion: (CompanionPlace) -> Unit,
+): Boolean {
+    val down = e.type == KeyEventType.KeyDown
     val bit = when (e.key) {
         Key.DirectionUp -> MgbaCore.Key.UP
         Key.DirectionDown -> MgbaCore.Key.DOWN
@@ -178,15 +252,28 @@ fun gameKey(emu: Emulator, e: KeyEvent): Boolean {
         Key.Backspace -> MgbaCore.Key.SELECT
         Key.A -> MgbaCore.Key.L
         Key.S -> MgbaCore.Key.R
-        Key.E -> {
-            if (e.type == KeyEventType.KeyDown) emu.expand = !emu.expand
+        Key.Spacebar -> { emu.ffHeld = down; return true }
+        else -> {
+            if (!down) return e.key in HOTKEYS
+            when (e.key) {
+                Key.E -> settings.setGameAspect(if (settings.gameAspect == GameAspect.WIDE) GameAspect.ORIGINAL else GameAspect.WIDE)
+                Key.Tab -> settings.setFfToggled(!settings.ffToggled)
+                Key.F5 -> slots.requestSave(slots.currentIndex)
+                Key.F7 -> slots.requestLoad(slots.currentIndex)
+                Key.F6 -> slots.select(slots.currentIndex - 1)
+                Key.F8 -> slots.select(slots.currentIndex + 1)
+                Key.F2 -> moveCompanion(if (place == CompanionPlace.WINDOW) CompanionPlace.DOCKED else CompanionPlace.WINDOW)
+                Key.F3 -> moveCompanion(if (place == CompanionPlace.HIDDEN) CompanionPlace.DOCKED else CompanionPlace.HIDDEN)
+                else -> return false
+            }
             return true
         }
-        else -> return false
     }
-    emu.keys = if (e.type == KeyEventType.KeyDown) emu.keys or bit else emu.keys and bit.inv()
+    emu.keys = if (down) emu.keys or bit else emu.keys and bit.inv()
     return true
 }
+
+private val HOTKEYS = setOf(Key.E, Key.Tab, Key.F5, Key.F7, Key.F6, Key.F8, Key.F2, Key.F3)
 
 /** The game, as large as the window allows at its own shape, square pixels, black around it. */
 @Composable
@@ -207,7 +294,8 @@ fun GameScreen(emu: Emulator, crash: Throwable?) {
         if (crash != null) Text("The game stopped: ${crash.message}", color = Color.White)
         else if (img != null) Canvas(Modifier.fillMaxSize()) {
             val scale = min(size.width / img.width, size.height / img.height)
-            val w = (img.width * scale).toInt()
+            // STRETCH: the GBA's picture made as wide as the window, at the window's height.
+            val w = if (emu.stretch) size.width.toInt() else (img.width * scale).toInt()
             val h = (img.height * scale).toInt()
             drawImage(
                 img,
@@ -219,14 +307,15 @@ fun GameScreen(emu: Emulator, crash: Throwable?) {
     }
 }
 
-/** The app's own companion, sized like the AYN Thor's bottom screen (1240 x 1080 at density 2.625) to fill the window. */
+/** The app's own companion, sized like the AYN Thor's bottom screen (1240 x 1080 at density 2.625) to fill its area,
+ * with the desktop's SETTINGS and STATES bridges. */
 @Composable
-fun CompanionWindow(snap: SnapshotView) {
+fun CompanionPanel(snap: SnapshotView, settings: DesktopSettings, slots: DesktopSlots) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val px = with(LocalDensity.current) { Pair(maxWidth.toPx(), maxHeight.toPx()) }
         val density = min(px.first / COMPANION_DP_W, px.second / COMPANION_DP_H)
         CompositionLocalProvider(LocalDensity provides Density(density)) {
-            Box(Modifier.fillMaxSize()) { CompanionScreen(snap) }
+            Box(Modifier.size(COMPANION_DP_W.dp, COMPANION_DP_H.dp)) { CompanionScreen(snap, slots = slots, settings = settings) }
         }
     }
 }

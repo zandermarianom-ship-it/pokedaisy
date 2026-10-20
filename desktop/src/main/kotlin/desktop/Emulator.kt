@@ -30,6 +30,22 @@ class Emulator(val rom: File, val save: File?) {
     /** SETTINGS > ASPECT > EXPAND: the overworld drawn past the GBA's edges, for a 16:9 window. */
     @Volatile var expand = true
 
+    /** SETTINGS > ASPECT > STRETCH: the game window fills its whole area (the picture is drawn wider than it is). */
+    @Volatile var stretch = false
+
+    /** Fast-forward: on while toggled (SETTINGS > FF, the menu) or held (Space); [ffSpeed] game frames per frame shown. */
+    @Volatile var ffToggled = false
+    @Volatile var ffHeld = false
+    @Volatile var ffSpeed = 4
+
+    /** Work for the emulator thread (save states, restart): run between frames, in order. */
+    private val jobs = java.util.concurrent.ConcurrentLinkedQueue<() -> Unit>()
+    fun post(job: () -> Unit) { jobs.add(job) }
+
+    /** The GBA's own 240 x 160 frame of the last frame shown (save-state thumbnails). */
+    @Volatile var lastGbaFrame: BufferedImage? = null
+        private set
+
     /** Whether pk_wide.c has this ROM's tables (EXPAND does nothing otherwise). */
     var expandKnown = false
         private set
@@ -51,20 +67,44 @@ class Emulator(val rom: File, val save: File?) {
         // The wide window: 16:9 at the GBA's height, the game's own 240 px in the middle.
         val w = WIDE_W
         MgbaCore.pkWideSetView(-(w - GBA_W) / 2, 0, w, GBA_H)
+        soundOn = sound
         if (sound) audio = openAudio(MgbaCore.pkSampleRate())
         println("booted ${rom.name}: code ${MgbaCore.pkRomCode()}, CRC32 $crc, EXPAND ${if (expandKnown) "available" else "not available"}")
     }
 
     /** Runs one frame with [keys], publishes it, plays its sound; samples the companion every [SAMPLE_EVERY] frames. */
     fun step() {
-        MgbaCore.pkSetKeys(keys)
-        MgbaCore.pkWideSetDraw(true)
-        MgbaCore.pkRunFrame()
-        frames++
-        publish()
-        audio?.let { drainAudio(it) } ?: MgbaCore.pkReadAudio(audioBuf)
-        if (frames % SAMPLE_EVERY == 0L) runCatching { store.refresh() }.onFailure { println("companion sample failed: $it") }
+        while (true) {
+            val job = jobs.poll() ?: break
+            runCatching { job() }.onFailure { println("emulator job failed: $it"); it.printStackTrace() }
+        }
+        // Fast-forward runs its extra frames unseen and unheard (pk_wide only notes them), then shows the last.
+        val n = if (ffToggled || ffHeld) ffSpeed.coerceIn(1, 8) else 1
+        for (i in 1..n) {
+            val shown = i == n
+            MgbaCore.pkSetKeys(keys)
+            MgbaCore.pkWideSetDraw(shown)
+            MgbaCore.pkRunFrame()
+            frames++
+            if (shown) {
+                publish()
+                audio?.let { drainAudio(it) } ?: MgbaCore.pkReadAudio(audioBuf)
+            } else MgbaCore.pkReadAudio(audioBuf)
+            if (frames % SAMPLE_EVERY == 0L) runCatching { store.refresh() }.onFailure { println("companion sample failed: $it") }
+        }
     }
+
+    /** SETTINGS > RESTART GAME: the core goes, the save that's been written stays, and the ROM boots again from it. */
+    fun restartNow() {
+        MgbaCore.pkFinishSave(600)
+        MgbaCore.pkDeinit()
+        store.reset()
+        audio?.close()
+        audio = null
+        boot(sound = soundOn)
+    }
+
+    private var soundOn = false
 
     /** Real time on its own thread: boot, then a frame every 1 / 59.73 s until [stop]. */
     fun start(sound: Boolean, onError: (Throwable) -> Unit) {
@@ -118,13 +158,19 @@ class Emulator(val rom: File, val save: File?) {
     }.onFailure { println("no sound: ${it.message}") }.getOrNull()
 
     private fun publish() {
+        if (MgbaCore.pkWideSkipped()) return
+        MgbaCore.pkVideoBuffer()?.let { lastGbaFrame = toImage(it, MgbaCore.pkVideoWidth(), MgbaCore.pkVideoHeight()) }
         val ww = MgbaCore.pkWideWidth()
         val wh = MgbaCore.pkWideHeight()
         val wide = expand && ww > 0 && wh > 0
         val buf = (if (wide) MgbaCore.pkWideBuffer() else MgbaCore.pkVideoBuffer()) ?: return
         val w = if (wide) ww else MgbaCore.pkVideoWidth()
         val h = if (wide) wh else MgbaCore.pkVideoHeight()
-        val px = buf.order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+        frame.set(toImage(buf, w, h))
+    }
+
+    private fun toImage(buf: java.nio.ByteBuffer, w: Int, h: Int): BufferedImage {
+        val px = buf.duplicate().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
         val out = IntArray(w * h)
         for (i in out.indices) {
             // The core's pixels are R, G, B, then a byte mGBA uses for the layer: opaque ARGB for AWT.
@@ -133,7 +179,7 @@ class Emulator(val rom: File, val save: File?) {
         }
         val img = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
         img.setRGB(0, 0, w, h, out, 0, w)
-        frame.set(img)
+        return img
     }
 
     companion object {
