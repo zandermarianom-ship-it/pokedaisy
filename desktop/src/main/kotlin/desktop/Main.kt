@@ -482,7 +482,7 @@ fun ApplicationScope.GameWindows(g: GameSession) {
                     SidePanelHandle(docked = true) { g.moveCompanion(CompanionPlace.POPUP) }
                 }
                 // Closed: the tab on the right edge, bottom, slides it in (Esc too, or the HUD's COMPANION).
-                if (g.place == CompanionPlace.HIDDEN) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
+                if (g.place == CompanionPlace.HIDDEN && g.settings.sidePanelTab != false) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
                     SidePanelOpenTab { g.moveCompanion(CompanionPlace.POPUP) }
                 }
             }
@@ -579,6 +579,7 @@ fun FrameWindowScope.GameMenus(
             }
         }
         CheckboxItem("HUD over the game", checked = settings.fieldHud, onCheckedChange = { settings.setFieldHud(it) })
+        CheckboxItem("Edge arrow (opens the companion)", checked = settings.sidePanelTab != false, onCheckedChange = { settings.setSidePanelTab(it) })
         Separator()
         GameAspect.entries.forEach { a ->
             RadioButtonItem("Screen: ${a.label}" + if (a == GameAspect.WIDE) " (E)" else "", selected = settings.gameAspect == a,

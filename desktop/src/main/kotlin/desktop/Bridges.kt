@@ -159,6 +159,12 @@ class DesktopSettings(
     val displayMode get() = modeState
     fun setDisplayMode(m: DisplayMode) { modeState = m; config.set("displayMode", m.name) }
 
+    /** EDGE ARROW: the tab on the window's right edge that slides the closed companion back in (the app's own setting,
+     * shared with the Library's Settings). Off, Esc, the pad's Y / Home and the HUD's COMPANION still open it. */
+    private var edgeArrow by mutableStateOf(prefs.sidePanelTab)
+    override val sidePanelTab: Boolean? get() = edgeArrow
+    override fun setSidePanelTab(on: Boolean) { edgeArrow = on; prefs.sidePanelTab = on }
+
     /** COMPANION VIEW: the side panel (the desktop's default) or the window in the middle over the game. */
     private var windowView by mutableStateOf(config.bool("companionWindowView", false))
     override val companionWindow: Boolean? get() = windowView
